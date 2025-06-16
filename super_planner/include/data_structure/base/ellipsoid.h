@@ -40,7 +40,9 @@ namespace geometry_utils {
 
         /// The ellipsoid is defined by shape C and center d
         Mat3f C_{}, C_inv_{};
+        // 椭球的朝向（球体也有朝向）
         Mat3f R_{};
+        // 椭球的半径，中心坐标
         Vec3f r_{}, d_{};
 
     public:
