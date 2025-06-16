@@ -85,6 +85,7 @@ namespace super_planner {
         }
 
         while (cnt_loop++ < max_loop) {
+            // 这里对应原文(fig8.B.ii)的拆分路径为一组线段
             second_id = first_id;
             for (int j = first_id + 1; j < path.size(); j++) {
                 bool reach_segment = false;
@@ -118,9 +119,9 @@ namespace super_planner {
                 return false;
             }
 
-// viz for debug
-//            ros_ptr_->vizCiriPolytope(temp_poly, "debug");
-//            usleep(10000);
+            // viz for debug
+            // ros_ptr_->vizCiriPolytope(temp_poly, "debug");
+            // usleep(10000);
 
             if (!sfcs.empty()) {
                 overlap = sfcs.back().CrossWith(temp_poly);
@@ -138,10 +139,10 @@ namespace super_planner {
                         ros_ptr_->warn(
                                 " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
                                 interior_depth);
-// viz for debug
-//                        ros_ptr_->vizCiriPointCloud(latest_pc);
-//                        usleep(100000);
-//                        exit(-1);
+                        // viz for debug
+                        // ros_ptr_->vizCiriPointCloud(latest_pc);
+                        // usleep(100000);
+                        // exit(-1);
                         return false;
                     }
                     temp_poly_fix_p.overlap_depth_with_last_one = interior_depth;
@@ -154,9 +155,9 @@ namespace super_planner {
                                 " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
                                 interior_depth);
                         // viz for debug
-//                        ros_ptr_->vizCiriPointCloud(latest_pc);
-//                        usleep(100000);
-//                        exit(-1);
+                        // ros_ptr_->vizCiriPointCloud(latest_pc);
+                        // usleep(100000);
+                        // exit(-1);
                         return false;
                     }
                 } else {
