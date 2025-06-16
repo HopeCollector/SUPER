@@ -312,6 +312,7 @@ namespace super_planner {
         box_max.z() -= robot_r_;
         MatD4f planes;
         Eigen::Vector3d a = line.first, b = line.second;
+        // bd: bounding box
         Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
         bd(0, 0) = 1.0;
         bd(1, 0) = -1.0;
@@ -344,6 +345,10 @@ namespace super_planner {
         latest_pc.insert(latest_pc.end(), pc.begin(), pc.end());
         Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pp(pc[0].data(), 3, pc.size());
         rog_map::TimeConsuming tc("emvp", false);
+        // 调用CIRI进行多面体分解
+        // bd: 输入线段的 bounding box
+        // pp：根据 bounding box 在原始点云中筛选出来的点，每个点都是障碍物
+        // a, b: 输入线段的两个端点
         RET_CODE success = ciri_->comvexDecomposition(bd, pp, a, b);
         double dt = tc.stop();
         if (success == SUCCESS) {
