@@ -399,6 +399,7 @@ namespace super_planner {
         Trajectory guide_pos_traj, guide_yaw_traj, last_exp_traj;
 
         // record the wall time (WT) and the trajectory time (TT) at the start of the replan.
+        // WT: 指实际消耗时间
         const double replan_process_start_WT = ros_ptr_->getSimTime();
         double replan_process_start_TT, replan_state_TT;
 
@@ -411,6 +412,7 @@ namespace super_planner {
             replan_process_start_TT = -1;
             replan_state_TT = -1;
         } else {
+            // 借用上一代规划结果填充到 guide_path 中，减少后面规划的计算量
             guide_pos_traj = cmd_traj_info_.posTraj(); // last_exp_traj;
             guide_yaw_traj = cmd_traj_info_.yawTraj(); //last_exp_traj_info.exp_yaw_traj;
             last_exp_traj = last_exp_traj_info.posTraj();
