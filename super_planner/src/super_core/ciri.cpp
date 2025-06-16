@@ -112,11 +112,16 @@ namespace super_planner {
                     }
 
                     if (robot_r_ < epsilon_) {
+                        // 用于处理机器人半径非常小的情况
+                        // 此时对障碍物膨胀为球的假设失效，将其看作点来处理
+                        // 此时的切平面法线就是障碍物点到原点的法向量
                         const Vec3f& pt_e = pc_e.col(pcMinId);
                         temp_tangent(3) = -distRs(pcMinId);
                         temp_tangent.head(3) = pt_e.transpose() / distRs(pcMinId);
 
+                        // 如果把任何一个端点切掉，就调整一下
                         if (temp_tangent.head(3).dot(fwd_a) + temp_tangent(3) > epsilon_) {
+                            // 重新构造一个切平面，这侧切平面的法向量与（fwd_a -> p_e）正交，经过 fwd_a
                             const Eigen::Vector3d delta = pc_e.col(pcMinId) - fwd_a;
                             temp_tangent.head(3) = fwd_a - (delta.dot(fwd_a) / delta.squaredNorm()) * delta;
                             distRs(pcMinId) = temp_tangent.head(3).norm();
@@ -131,6 +136,7 @@ namespace super_planner {
                             temp_tangent.head(3) /= distRs(pcMinId);
                         }
                         if (temp_tangent.head(3).dot(fwd_b) + temp_tangent(3) > epsilon_) {
+                            // FIXME: 跟上面的 if 重复了吧？
                             const Eigen::Vector3d delta = pc_e.col(pcMinId) - fwd_b;
                             temp_tangent.head(3) = fwd_b - (delta.dot(fwd_b) / delta.squaredNorm()) * delta;
                             distRs(pcMinId) = temp_tangent.head(3).norm();
@@ -144,6 +150,7 @@ namespace super_planner {
                         const Vec3f &pt_e = pc_e.col(pcMinId);
                         const Vec3f &pt_w = pc.col(pcMinId);
                         Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
+                        // 直接找到障碍物椭球上的到原点的最近点
                         Vec3f close_pt_e;
                         E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
                         Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
