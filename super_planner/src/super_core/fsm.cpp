@@ -188,6 +188,7 @@ namespace fsm {
             click_point.z() = cfg_.click_height;
         }
 
+        // 找一个三米内最近的空闲点作为目标点
         if (planner_ptr_->getMap()->getNearestInfCellNot(GridType::OCCUPIED, click_point, gi_.goal_p, 3.0)) {
             cout << GREEN << " -- [Fsm] Get goal at " << RESET << gi_.goal_p.transpose() << endl;
         } else {
@@ -195,6 +196,7 @@ namespace fsm {
             return;
         }
 
+        // 距离目标点太近，直接结束
         if ((robot_state_.p - gi_.goal_p).norm() <
             0.1) {
             //                print(fg(color::gray), " -- [Rviz] Too close to goal, skip this target.\n");
@@ -202,6 +204,7 @@ namespace fsm {
         }
 
         if (cfg_.click_yaw_en) {
+            // 如果控制 yaw，从四元数获取目标
             if (isnan(q.w()) || isnan(q.x()) || isnan(q.y()) || isnan(q.z())) {
                 gi_.goal_yaw = NAN;
                 ros_ptr_->info(" -- [Fsm] Receive click goal at: [{}, {}, {}]; goal yaw disabled",
