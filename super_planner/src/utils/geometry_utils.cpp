@@ -36,6 +36,7 @@ using namespace std;
 
 
 // reference: https://www.geometrictools.com/Documentation/DistancePointEllipseEllipsoid.pdf
+// 对应 ref71-2.9
 double geometry_utils::DistancePointEllipse(double e0, double e1,
                             double y0, double y1,
                             double& x0, double& x1) {
@@ -118,6 +119,7 @@ double geometry_utils::DistancePointEllipse(double e0, double e1,
     return distance;
 }
 
+// 对应 ref71-3.10，笔记 notes\FindCloestObstacle.md
 double
 geometry_utils::DistancePointEllipsoid(double e0, double e1, double e2,
                        double y0, double y1, double y2,
@@ -150,6 +152,7 @@ geometry_utils::DistancePointEllipsoid(double e0, double e1, double e2,
     double distance;
     double record_sign[3] = {1, 1, 1};
 
+    // 根据 ref71 的要求，将查询点调整到第一象限
     if (y0 < 0) {
         record_sign[0] = -1;
         y0 = -y0;
