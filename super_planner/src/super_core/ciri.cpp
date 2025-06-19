@@ -29,17 +29,25 @@ using namespace super_utils;
 
 namespace super_planner {
 
+    // 对应补充材料的 Ellipsoid-based Convex Decomposition 小节
+    // 参见笔记 notes/CIRI.md
+    // bd[6,4]: 输入线段的 bounding box，每行一个平面(Ax + By + Cz + D = 0)，所有法向量都指向外部
+    //     bbox 并不是线段实际的包围盒，首先经过一定大小为 corridor_bound_dis 的扩张
+    //     其次，高度被缩小了 robot_r
+    // pc：根据 bounding box 在原始点云中筛选出来的点，每个点都是障碍物
+    // a, b: 输入线段的两个端点
     RET_CODE CIRI::comvexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, const Eigen::Vector3d& a,
                                        const Eigen::Vector3d& b) {
+        // 两个端点的齐次形式
         const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
         const Eigen::Vector4d bh(b(0), b(1), b(2), 1.0);
 
         /// force return if the seed is not inside the boundary
         if ((bd * ah).maxCoeff() > epsilon_ ||
             (bd * bh).maxCoeff() > epsilon_) {
-//            cout << YELLOW << " -- [WARN] ah, bh not in BD, forced return." << endl;
-//            cout << "bd  * ah: " << (bd * ah).transpose().maxCoeff() << endl;
-//            cout << "bd  * bh: " << (bd * bh).transpose().maxCoeff() << endl;
+            // cout << YELLOW << " -- [WARN] ah, bh not in BD, forced return." << endl;
+            // cout << "bd  * ah: " << (bd * ah).transpose().maxCoeff() << endl;
+            // cout << "bd  * bh: " << (bd * bh).transpose().maxCoeff() << endl;
             return INIT_ERROR;
         }
 
@@ -48,6 +56,7 @@ namespace super_planner {
         const int M = bd.rows();
         const int N = pc.cols();
 
+        // 初始化自由空间的椭球
         Ellipsoid E(Mat3f::Identity(), (a + b) / 2);
         if ((a - b).norm() > 0.1) {
             /// use line seed
@@ -57,7 +66,7 @@ namespace super_planner {
         vector<Eigen::Vector4d> planes;
         MatD4f hPoly;
 
-//        bool infeasible_problem{false};
+        // bool infeasible_problem{false};
         Vec3f infeasible_pt_w;
 
         for (int loop = 0; loop < iter_num_; ++loop) {
@@ -65,6 +74,7 @@ namespace super_planner {
             const Eigen::Vector3d fwd_a = E.toEllipsoidFrame(a);
             const Eigen::Vector3d fwd_b = E.toEllipsoidFrame(b);
             const Eigen::MatrixX4d bd_e = E.toEllipsoidFrame(bd);
+            // 椭球坐标系下 bbox 平面到原点的距离
             const Eigen::VectorXd distDs = bd_e.rightCols<1>().cwiseAbs().cwiseQuotient(
                     bd_e.leftCols<3>().rowwise().norm());
             const Eigen::Matrix3Xd pc_e = E.toEllipsoidFrame(pc);
@@ -89,6 +99,8 @@ namespace super_planner {
             for (int i = 0; !completed && i < (M + N); ++i) {
                 if (minSqrD < minSqrR) {
                     /// Case [Bd closer than ob]  enable the boundary constrain.
+                    // bbox 平面到原点的距离比其他障碍物都要近
+                    // 直接把他当作自由空间的一个平面存起来
                     Vec4f p_e = bd_e.row(bdMinId);
                     temp_plane_w = E.toWorldFrame(p_e);
                     bdFlags(bdMinId) = 0;
@@ -97,10 +109,12 @@ namespace super_planner {
                     /// Case [Ob closer than Bd] enable the obstacle point constarin.
                     ///     Compute the tangent plane of sphere
                     ///
+                    // 障碍物距离原点的距离比 bbox 近的情况
                     const auto & pt_w = pc.col(pcMinId);
                     const auto dis = distancePointToSegment(pt_w,a,b);
                     if(dis < robot_r_ - 1e-2) {
-//                        infeasible_problem = true;
+                        // 如果障碍物点到线段的距离小于机器人半径，则认为快他妈撞上了，直接失败
+                        // infeasible_problem = true;
                         infeasible_pt_w = pt_w;
                         cout<<YELLOW<<" -- [CIRI] WARNING! The problem is not feasible, the min dis to obstacle is only: "<<dis<<RESET<<endl;
                         return FAILED;
@@ -153,11 +167,13 @@ namespace super_planner {
                         // 直接找到障碍物椭球上的到原点的最近点
                         Vec3f close_pt_e;
                         E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
+                        // 生成一个经过 c_pt_w 的切平面
                         Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
                         temp_plane_w.head(3) = (pt_w - c_pt_w).normalized();
                         temp_plane_w(3) = -temp_plane_w.head(3).dot(c_pt_w);
 
                         /// Cut line with sphere A and B,
+                        // 参见笔记 notes/CIRI.md#CheckAndAdjustPlane（Algorithm2-line7）
                         if (temp_plane_w.head(3).dot(a) + temp_plane_w(3) > -epsilon_) {
                             // Case the plan make seed out, the plane should be modified in world frame
                             findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w);
@@ -166,13 +182,16 @@ namespace super_planner {
                             findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w);
                         }
                     }
-                    pcFlags(pcMinId) = 0;
-                    tmp_nn_pt = pc.col(pcMinId);
+                    pcFlags(pcMinId) = 0; // 标记障碍物点已经处理过了
+                    tmp_nn_pt = pc.col(pcMinId); // FIXME: 没用的东西
                 }
                 // update pcMinId and bdMinId
                 completed = true;
+                // 处理 bbox
                 minSqrD = INFINITY;
                 for (int j = 0; j < M; ++j) {
+                    // 如果发现还有 bbox 平面没处理，则认为还没有完成
+                    // 同时找一个距离最小的平面，更新 bdMinId、minSqrD
                     if (bdFlags(j)) {
                         completed = false;
                         if (minSqrD > distDs(j)) {
@@ -181,13 +200,17 @@ namespace super_planner {
                         }
                     }
                 }
+                // 处理障碍物点
                 minSqrR = INFINITY;
                 for (int j = 0; j < N; ++j) {
                     if (pcFlags(j)) {
                         if ((temp_plane_w.head(3).dot(pc.col(j)) + temp_plane_w(3)) > robot_r_ - epsilon_) {
+                            // 标记所有落到超平面之外的点，表示删除
                             pcFlags(j) = 0;
                         }
                         else {
+                            // 如果还在超平面内侧，则认为还没有完成
+                            // 同时找一个距离最小的点，更新 pcMinId、minSqrR
                             completed = false;
                             if (minSqrR > distRs(j)) {
                                 pcMinId = j;
@@ -196,6 +219,7 @@ namespace super_planner {
                         }
                     }
                 }
+                // 将当前超平面存起来
                 planes.push_back(temp_plane_w);
             }
 
@@ -263,6 +287,7 @@ namespace super_planner {
         //        split_thresh_ = split_thresh;
     }
 
+    // 参见笔记 notes/CIRI.md#CheckAndAdjustPlane（Algorithm2-line7）
     void CIRI::findTangentPlaneOfSphere(const Eigen::Vector3d& center, const double& r,
                                         const Eigen::Vector3d& pass_point,
                                         const Eigen::Vector3d& seed_p,
@@ -297,25 +322,35 @@ namespace super_planner {
         Vec3f seed = seed_p;
         Vec3f dif = pass_point - pass_point;
         if (dif.norm() < 1e-3) {
+            // 生成一个在 xoy 平面的 seed 点，其与 seed_p 的连线在 xoy 平面上
             if ((pass_point - center).head(2).norm() > 1e-3) {
+                // 如果 pass_point 与 center 在 xoy 平面的投影有一定距离
+                // 则将 pass_point 投影到 xoy 平面上，计算与 z 轴的叉积来生成一个新的 seed
                 Vec3f v1 = (pass_point - center).normalized();
                 v1(2) = 0;
                 seed = seed_p + 0.01 * v1.cross(Vec3f(0, 0, 1)).normalized();
             }
             else {
+                // 如果 pass_point 与 center 在 xoy 平面的投影非常接近
+                // 直接使用不投影的向量与 x 轴的叉积来生成一个新的 seed
                 seed = seed_p + 0.01 * (pass_point - center).cross(Vec3f(1, 0, 0)).normalized();
             }
         }
+        // 设原坐标系为 w
+        // 这里开始的计算将转换为以 center 为原点，norm_ 为 z 轴的坐标系，记为 c
+        // T_c_w = [R^T, c], T_w_c = [R, -R * c]
         Eigen::Vector3d P = pass_point - center;
         Eigen::Vector3d norm_ = (pass_point - center).cross(seed - center).normalized();
         Eigen::Matrix3d R = Eigen::Quaterniond::FromTwoVectors(norm_, Vec3f(0, 0, 1)).matrix();
-        P = R * P;
-        Eigen::Vector3d C = R * (seed - center);
+        P = R * P; // P^c
+        Eigen::Vector3d C = R * (seed - center); // seed^c
         Eigen::Vector3d Q;
+        // 这里开始将三维计算简化为坐标系 c 中 xoy 平面上的二维计算
         double r2 = r * r;
         double p1p2n = P.head(2).squaredNorm();
-        double d = sqrt(p1p2n - r2);
+        double d = sqrt(p1p2n - r2); // P 到圆上切点的切线长度
         double rp1p2n = r / p1p2n;
+        // 计算平面上的切点
         double q11 = rp1p2n * (P(0) * r - P(1) * d);
         double q21 = rp1p2n * (P(1) * r + P(0) * d);
 
@@ -329,8 +364,10 @@ namespace super_planner {
             Q(0) = q11;
             Q(1) = q21;
         }
+        // 由于是在 xoy 平面上计算的切点，所以 z 坐标为 0
         Q(2) = 0;
         // point(Q) + normal (AQ)
+        // 回到原坐标系 w 中
         outter_plane.head(3) = R.transpose() * Q;
         Q = outter_plane.head(3) + center;
         outter_plane(3) = -Q.dot(outter_plane.head(3));
