@@ -376,28 +376,37 @@ namespace super_planner {
         }
     }
 
+    // 参考笔记 CIRI::findEllipsoid（Algorith1-line3.5）
     void CIRI::findEllipsoid(const Eigen::Matrix3Xd& pc,
                              const Eigen::Vector3d& a,
                              const Eigen::Vector3d& b,
                              Ellipsoid& out_ell) {
         double f = (a - b).norm() / 2;
-        Mat3f C = f * Mat3f::Identity();
+        Mat3f C = f * Mat3f::Identity(); // 后面没用上
+        // 将线段的长度缩小一半，作为椭球的半长轴
         Vec3f r = Vec3f::Constant(f);
+        // 椭球中心
         Vec3f center = (a + b) / 2;
         C(0, 0) += robot_r_;
+        // r0 轴上的半长轴增加机器人半径
         r(0) += robot_r_;
         if (r(0) > 0) {
+            // 按比例缩放椭球的剩下的半长轴，保证最长的 r0 仍然是 f
             double ratio = r(1) / r(0);
             r *= ratio;
             C *= ratio;
         }
 
+        // 计算将 x 轴与 r0 对齐的旋转矩阵
         Mat3f Ri = Eigen::Quaterniond::FromTwoVectors(Vec3f::UnitX(), (b - a)).toRotationMatrix();
+        // 使用朝向、半轴长和中心点初始化椭球
+        // 注意：这里的 Ri 是将椭球的 x 轴对齐到 ab 的方向，也就是 r0 的方向
         Ellipsoid E(Ri, r, center);
         Mat3f Rf = Ri;
         Mat3Df obs;
         int min_dis_id;
         Vec3f pw;
+        // 提取椭球内部的距离中心最近的障碍物
         if (E.pointsInside(pc, obs, min_dis_id)) {
             pw = obs.col(min_dis_id);
         }
@@ -407,15 +416,26 @@ namespace super_planner {
         }
         Mat3Df obs_inside = obs;
         int max_iter = 100;
+
+        // 这里开始调整椭球的 r1 轴
         while (max_iter--) {
+            // 先把 pw 投影到椭球坐标系上
             Vec3f p_e = Ri.transpose() * (pw - E.d());
+            // 算一下 p_e 在这个坐标系下距离 xoy 平面还差多少
             const double roll = atan2(p_e(2), p_e(1));
+            // 补上这个旋转角度（转椭球）
             Rf = Ri * Eigen::Quaterniond(cos(roll / 2), sin(roll / 2), 0, 0);
+            // 调整椭球的 roll 角，以便把 pw 完整的转换到椭球坐标系的 xoy 平面上
             p_e = Rf.transpose() * (pw - E.d());
             if (p_e(0) < r(0)) {
+                // 根据椭球公式 x^2/a^2 + y^2/b^2 + z^2/c^2 = 1 重新计算椭球的短轴，也就是 r1
+                // 目标是让 p_e 落在 xoy 平面的椭圆边界上，因此 x=r0，y=r1
+                // 解出来 r1 的表达式就是下面的东西
                 r(1) = std::abs(p_e(1)) / std::sqrt(1 - std::pow(p_e(0) / r(0), 2));
             }
+            // 更新椭球参数
             E = Ellipsoid(Rf, r, center);
+            // 重新寻找一个最近的障碍物点
             if (E.pointsInside(obs_inside, obs_inside, min_dis_id)) {
                 pw = obs_inside.col(min_dis_id);
             }
@@ -428,7 +448,7 @@ namespace super_planner {
         }
         max_iter = 100;
 
-
+        // 重新找到一个最近的障碍物点
         if (E.pointsInside(obs, obs_inside, min_dis_id)) {
             pw = obs_inside.col(min_dis_id);
         }
@@ -437,10 +457,17 @@ namespace super_planner {
             return;
         }
 
+        // 这里开始调整椭球的 r2 轴
         while (max_iter--) {
+            // 这里仍然在调整轴长，只不过不再投影到 xoy 平面，而是直接在三维空间中调整 r2
+            // 方法与上面的一样
             Vec3f p = Rf.transpose() * (pw - E.d());
+            // 椭球公式 x^2/r0^2 + y^2/r1^2 + z^2/r2^2 = 1
+            // 调整到 p 落在椭球的边界上，因此 x=p0, y=p1, z=p2
+            // p2^2 / r2^2 = dd = 1 - p0^2 / r0^2 - p1^2 / r1^2
             double dd = 1 - std::pow(p(0) / r(0), 2) -
                         std::pow(p(1) / r(1), 2);
+            // dd 不能太小，不然数值不稳定
             if (dd > epsilon_) {
                 r(2) = std::abs(p(2)) / std::sqrt(dd);
             }
