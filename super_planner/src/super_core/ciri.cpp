@@ -36,6 +36,10 @@ namespace super_planner {
     //     其次，高度被缩小了 robot_r
     // pc：根据 bounding box 在原始点云中筛选出来的点，每个点都是障碍物
     // a, b: 输入线段的两个端点
+    // 若一切正常会在 optimized_polytope_ 中设置这些内容
+    //   1. hPoly: 生成的凸多面体的超平面
+    //   2. seedLine: 输入的线段
+    //   3. E: 多面体的内切椭球
     RET_CODE CIRI::comvexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, const Eigen::Vector3d& a,
                                        const Eigen::Vector3d& b) {
         // 两个端点的齐次形式

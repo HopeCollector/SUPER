@@ -574,6 +574,7 @@ double geometry_utils::findInteriorDist(const Eigen::MatrixX4d& hPoly,
 
 // Each row of hPoly is defined by h0, h1, h2, h3 as
 // h0*x + h1*y + h2*z + h3 <= 0
+// 求一个多面体的内部点
 bool geometry_utils::findInterior(const Eigen::MatrixX4d& hPoly,
                                   Eigen::Vector3d& interior) {
     const int m = hPoly.rows();

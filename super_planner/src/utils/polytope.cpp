@@ -70,7 +70,8 @@ Vec3f Polytope::CrossCenter(const Polytope &b) const {
     return Vec3f(x, y, z);
 }
 
-
+// 获取重叠区域
+// FIXME: 这里只是简单的把所有平面都放在一起，这能得到什么有意义的结果？
 Polytope Polytope::CrossWith(const Polytope &b) const {
     MatD4f curIH;
     curIH.resize(this->SurfNum() + b.SurfNum(), 4);

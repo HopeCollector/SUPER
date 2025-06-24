@@ -51,6 +51,14 @@ namespace super_planner {
         this->line_seed_neighbor_list = _line_seed_neighbor_list;
     }
 
+    // 在路径上搜索安全飞行走廊
+    // 输入：
+    //  - path: 路径点列表
+    //  - sfcs: 输出的安全飞行走廊列表，sfc（Safe Flight Corridor）
+    //  - shifted_start_pt: 第一个安全的起点，防止起点被障碍物占据
+    //  - cut_first_poly: 没用上
+    // 输出：
+    //  - 返回是否成功搜索到安全飞行走廊
     bool
     CorridorGenerator::SearchPolytopeOnPath(const vec_Vec3f &path, PolytopeVec &sfcs,
                                             Vec3f &shifted_start_pt,
@@ -73,13 +81,16 @@ namespace super_planner {
         int cnt_loop = 0;
         first_id = 0;
 
+        // 快速跳过路径上被占据的点，找到第一个安全的起点
         while(first_id < path.size() && map_ptr_->isOccupiedInflate(path[first_id])) {
             first_id++;
         }
 
+        // 更新安全起点相关信息
         if(first_id!=0){
             shifted_start_pt = path[first_id];
             double dis = (path[first_id] - path[0]).norm() * 1.2;
+            // 根据第一个安全点和第一个路径点的距离生成一个空的多面体
             GenerateEmptyPolytope(path[0], dis, temp_poly);
             sfcs.emplace_back(temp_poly);
         }
@@ -114,6 +125,7 @@ namespace super_planner {
                 throw std::runtime_error("seed line too long");
                 return false;
             }
+            // 在新加入的线段上搜索多面体
             if (!GeneratePolytopeFromLine(seed_lines.back(), temp_poly)) {
                 cout << YELLOW << " -- [SUPER] GeneratePolytopeFromLine failed." << RESET << endl;
                 return false;
@@ -123,19 +135,29 @@ namespace super_planner {
             // ros_ptr_->vizCiriPolytope(temp_poly, "debug");
             // usleep(10000);
 
+            // 如果不是第一个多面体，还需要进行下面一些处理才能加入 sfc 列表
             if (!sfcs.empty()) {
+                // 获取与上一个多面体重叠的部分
                 overlap = sfcs.back().CrossWith(temp_poly);
+                // 获取重叠部分的内部点
                 interior_depth = geometry_utils::findInteriorDist(overlap.GetPlanes(), interior_pt);
                 temp_poly.overlap_depth_with_last_one = interior_depth;
                 temp_poly.interior_pt_with_last_one = interior_pt;
+                // 如果重叠部分的内部深度小于最小重叠阈值，则需要修正多面体
+                // 这个深度来自配置文件的 rog_map.resolution
+                // 意思就是两个多面体之间的重叠深度不能小于一个 voxel 的深度
                 if (interior_depth < min_overlap_threshold_) {
+                    // 尝试改为使用单个点作为生成多面体的种子点
                     if (!GeneratePolytopeFromPoint(path[first_id], temp_poly_fix_p)) {
                         cout << YELLOW << " -- [SUPER] GeneratePolytopeFromPoint failed." << RESET << endl;
                         return false;
                     }
+                    // 再次计算重叠深度
                     overlap = sfcs.back().CrossWith(temp_poly_fix_p);
                     interior_depth = geometry_utils::findInteriorDist(overlap.GetPlanes(), interior_pt);
+                    // 将深度限制放宽到 0.01
                     if (interior_depth <= 0.01) {
+                        // 如果小于 0.01，则说明无法找到连续的走廊 （这里已经不再使用 min_overlap_threshold_ 了）
                         ros_ptr_->warn(
                                 " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
                                 interior_depth);
@@ -145,11 +167,15 @@ namespace super_planner {
                         // exit(-1);
                         return false;
                     }
+                    // 保存修正后的多面体（使用单个点作为种子点）
                     temp_poly_fix_p.overlap_depth_with_last_one = interior_depth;
                     temp_poly_fix_p.interior_pt_with_last_one = interior_pt;
                     sfcs.push_back(temp_poly_fix_p);
+
+                    // 重新计算重叠部分
                     overlap = sfcs.back().CrossWith(temp_poly);
                     interior_depth = geometry_utils::findInteriorDist(overlap.GetPlanes(), interior_pt);
+                    // 如果重叠深度仍然小于最小重叠阈值，则说明无法找到连续的走廊
                     if (interior_depth <= 0.01) {
                         ros_ptr_->warn(
                                 " -- [SUPER] Cannot find continuous corridor on path, overlap only {}, force return.",
@@ -161,10 +187,12 @@ namespace super_planner {
                         return false;
                     }
                 } else {
+                    // 尝试与上上个多面体进行重叠处理，以避免将要加入的多面体与上一个多面体重叠过大
                     int temp_id = sfcs.size() - 2;
                     if (temp_id > 0) {
                         overlap = sfcs[temp_id].CrossWith(temp_poly);
                         interior_depth = geometry_utils::findInteriorDist(overlap.GetPlanes(), interior_pt);
+                        // 如果重叠深度大于上上个多面体的重叠深度的 25%，则将上一个多面体删除并更新重叠信息
                         if (interior_depth > sfcs[temp_id + 1].overlap_depth_with_last_one * 0.25) {
                             temp_poly.overlap_depth_with_last_one = interior_depth;
                             temp_poly.interior_pt_with_last_one = interior_pt;

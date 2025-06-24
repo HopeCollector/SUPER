@@ -108,6 +108,7 @@ astar:
 
 
 rog_map:
+  # 体素的尺寸，同时也表示飞行走廊最小的重叠深度
   resolution: 0.1
   inflation_resolution: 0.2
   inflation_step: 2
@@ -120,6 +121,8 @@ rog_map:
 
   # Virtual ceil and ground
   # 用于限制地图的高度范围 [m]
+  # 它会影响程序对栅格是否被占用的判断
+  # 如果查询点的高度超过了虚拟天花板，会被认为是占用状态
   virtual_ceil_height: 3.5
   virtual_ground_height: -0.1
 
