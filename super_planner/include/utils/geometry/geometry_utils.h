@@ -63,29 +63,57 @@ namespace geometry_utils {
     using super_utils::PolyhedronH;
 
     ///============ 2023-06-30: add by yunfan ============///
+    /**
+     * @brief 简单的多项式运动时间分配器
+     * 
+     * 该函数实现了一个基于最大加速度和最大速度约束的运动规划算法。
+     * 它计算在给定当前距离下的时间和速度，支持三种运动模式：
+     * 1. 仅加速到初始速度v0
+     * 2. 加速到最大速度后立即减速
+     * 3. 加速 + 匀速 + 减速的完整运动轮廓
+     * 
+     * @param a_max 最大加速度 (m/s²)
+     * @param v_max 最大速度 (m/s)
+     * @param v0 末端速度 (m/s)
+     * @param total_dis 总距离 (m)
+     * @param cur_dis 当前距离 (m)
+     * @param t 输出参数：到达当前距离所需的时间 (s)
+     * @param vel 输出参数：在当前距离处的速度 (m/s)
+     */
     static void simplePMTimeAllocator(const double &a_max, const double &v_max,
                                 const double &v0,
                                 const double &total_dis,
                                 const double &cur_dis, double &t, double &vel) {
         // Helper lambda functions
+        // 计算在恒定加速度a下，时间t内的位移距离
         auto calc_dis = [](double a, double t) { return 0.5 * a * t * t; };
+        // 计算在恒定加速度a下，到达距离cur_dis所需的时间
         auto calc_time = [](double a, double cur_dis) { return sqrt(2 * cur_dis / a); };
+        // 求解二次方程 ax² + bx + c = 0 的正根
         auto solve_quadratic = [](double a, double b, double c) {
             double delta = b * b - 4 * a * c;
             return (-b + sqrt(delta)) / (2 * a);
         };
 
         // Precompute reusable values
+        // 预计算可重用的值
+        // 从0加速到最大速度v_max所需的时间
         const double t_to_v_max = v_max / a_max;
+        // 从0加速到最大速度v_max所需的距离
         const double dis_to_v_max = calc_dis(a_max, t_to_v_max);
 
+        // 从0加速到初始速度v0所需的时间
         const double t_to_v0 = v0 / a_max;
+        // 从0加速到初始速度v0所需的距离
         const double dis_to_v0 = calc_dis(a_max, t_to_v0);
 
+        // 从最大速度v_max减速到初始速度v0所需的时间
         const double dec_time = (v_max - v0) / a_max;
+        // 从最大速度v_max减速到初始速度v0所需的距离
         const double dec_dis = 0.5 * (v_max + v0) * dec_time;
 
         // Case 1: Only acceleration to v0
+        // 当距离甚至不够加速到 v0 时
         if (total_dis <= dis_to_v0) {
             t = calc_time(a_max, cur_dis);
             vel = a_max * t;
@@ -93,11 +121,17 @@ namespace geometry_utils {
         }
 
         // Case 2: Acceleration to v_max, then deceleration
+        // Case 2: 加速然后立即减速，总距离不够维持以最大速度匀速运动
         if (total_dis <= dis_to_v_max + dec_dis) {
+            // 猜测这个问题为： 初始速度为 0，以 a 加速，然后以 a 减速，达到 v0 停止，要求走过的路径为 total_dis
+            // 距离不够的话不一定能加速到 v_max，记最大速度为 v_peak <= v_max
             const double a = 2 * a_max;
+            // FIXME: b 应该是 0，有待测试
             const double b = -(a_max - v0);
             const double c = -(v0 * v0 / a_max + 2 * total_dis);
             const double t_acc = solve_quadratic(a, b, c);
+            // 这个是对的，加速时间 = t(0->v0) + t(v0->v_peak)
+            // 减速时间 t(v_peak->v0) = t(v0->v_peak)
             const double t_dec = t_acc - t_to_v0;
             const double dis_acc = calc_dis(a_max, t_acc);
             const double cur_v_max = a_max * t_acc;
@@ -115,12 +149,15 @@ namespace geometry_utils {
         }
 
         // Case 3: Acceleration + constant speed + deceleration
+        // Case 3: 加速到最大速度 v_max，然后匀速运动，最后减速到 v0
         if (cur_dis < dis_to_v_max) {  // Case 3.1: During acceleration phase
+            // Case 3.1: 在加速阶段
             t = calc_time(a_max, cur_dis);
             vel = a_max * t;
             return;
         }
 
+        // Case 3.2: 处于匀速运动阶段
         if (cur_dis < total_dis - dec_dis) {  // Case 3.2: During constant speed phase
             const double remaining_dis = cur_dis - dis_to_v_max;
             const double t_const = remaining_dis / v_max;
@@ -130,6 +167,7 @@ namespace geometry_utils {
         }
 
         // Case 3.3: During deceleration phase
+        // Case 3.3: 在减速阶段
         const double const_phase_dis = total_dis - dec_dis - dis_to_v_max;
         const double remaining_dis = cur_dis - dis_to_v_max - const_phase_dis;
         const double t_dec = solve_quadratic(-a_max, 2 * v_max, -2 * remaining_dis);
