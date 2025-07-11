@@ -273,35 +273,46 @@ namespace fsm {
         void init(const ros::NodeHandle &nh, const std::string &cfg_path) {
             // 初始化参数读取
             nh_ = nh;
+            // 解析部分参数, 包括 [fsm] 全部, [super_planner] 的两个参数, 和 [rog_map/resolution]
             cfg_ = Config(cfg_path);
             map_ptr_ = std::make_shared<rog_map::ROGMapROS>(nh, cfg_path);
-            // 初始化Planner
+            // 初始化基于 ros 的可视化模块
             ros_ptr_ = std::make_shared<ros_interface::Ros1Interface>(nh_);
+            // 初始化规划器, 这个是核心模块
             planner_ptr_ = std::make_shared<SuperPlanner>(cfg_path, ros_ptr_, map_ptr_);
+            // 初始化指令发布成员
             cmd_pub = nh_.advertise<quadrotor_msgs::PositionCommand>(cfg_.cmd_topic, 10);
             mpc_cmd_pub_ = nh_.advertise<quadrotor_msgs::PolynomialTrajectory>(cfg_.mpc_cmd_topic, 10);
+            // 初始化轨迹发布成员
             path_pub_ = nh_.advertise<nav_msgs::Path>("fsm/path", 100);
 
+            // FIXME: cmd_cnt 看起来没用啊
             int cmd_cnt = 0;
 
+            // 开启点击功能
             if (cfg_.click_goal_en) {
                 goal_sub_ = nh_.subscribe(cfg_.click_goal_topic, 1, &FsmRos1::goalCallback, this);
                 cout << YELLOW << " -- [Fsm] CLICKGOAL ENABLE." << RESET << endl;
                 cmd_cnt++;
             }
 
+            // FIXME: if (cmd_cnt != 1) 感觉是多余的判断
             if (cmd_cnt != 1) {
                 cout << YELLOW << " -- [Fsm] CMD INPUT ERROR." << RESET << endl;
                 exit(0);
             }
 
             if (cfg_.timer_en) {
+                // 状态机主循环定时器
                 execution_timer_ = nh_.createTimer(ros::Duration(0.01), &FsmRos1::mainFsmTimerCallback, this); // 100Hz
+                // 指令发布定时器
                 cmd_timer_ = nh_.createTimer(ros::Duration(0.01), &FsmRos1::pubCmdTimerCallback, this); // 100Hz
+                // 重规划定时器
                 replan_timer_ = nh_.createTimer(ros::Duration(1.0 / cfg_.replan_rate), &FsmRos1::replanTimerCallback,
                                                 this); // 10Hz
             }
 
+            // 初始化日志文件
             write_time_.open(DEBUG_FILE_DIR("time_consuming.csv"), std::ios::out | std::ios::trunc);
             log_module_time.resize(9);
             for (int i = 0; i < 9; i++) {
@@ -314,6 +325,7 @@ namespace fsm {
             machine_state_ = INIT;
             system_start_time_ = ros_ptr_->getSimTime();
 
+            // TODO: 弄明白 pid_cmd_.kx kv 有什么用
             pid_cmd_.kx[0] = 5.7;
             pid_cmd_.kx[1] = 5.7;
             pid_cmd_.kx[2] = 4.2;
