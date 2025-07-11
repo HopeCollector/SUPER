@@ -73,6 +73,8 @@ namespace super_planner {
         // Yaw mode: 1 heading to velocity, 2 heading to goal
         int yaw_mode = YAW_TO_VEL;
 
+        // 凸分解用到的种子线段在其附近多大范围内不能有障碍
+        // 单位是格子数, 需要在线段每一点上向外扩张出半径为 robot_r 的范围
         rog_map::vec_E<rog_map::Vec3i> seed_line_neighbour;
 
 

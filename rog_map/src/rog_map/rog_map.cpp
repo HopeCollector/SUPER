@@ -29,12 +29,15 @@ void ROGMap::init() {
 
     initProbMap();
 
+    // 初始化地图信息日志文件
     map_info_log_file_.open(DEBUG_FILE_DIR("rm_info_log.csv"), std::ios::out | std::ios::trunc);
     time_log_file_.open(DEBUG_FILE_DIR("rm_performance_log.csv"), std::ios::out | std::ios::trunc);
 
 
+    // 设置机器人初始位置
     robot_state_.p = cfg_.fix_map_origin;
 
+    // 配置滑动地图
     if (cfg_.map_sliding_en) {
         mapSliding(Vec3f(0, 0, 0));
         inf_map_->mapSliding(Vec3f(0, 0, 0));
@@ -48,8 +51,11 @@ void ROGMap::init() {
         inf_map_->mapSliding(cfg_.fix_map_origin);
     }
 
+    // 保存地图信息到日志文件
     writeMapInfoToLog(map_info_log_file_);
     map_info_log_file_.close();
+
+    // 保存时间消耗信息的列名称到日志文件
     for (int i = 0; i < time_consuming_name_.size(); i++) {
         time_log_file_ << time_consuming_name_[i];
         if (i != time_consuming_name_.size() - 1) {
@@ -59,6 +65,7 @@ void ROGMap::init() {
     time_log_file_ << endl;
 
 
+    // 如果启用PCD加载功能，则加载PCD文件
     if (cfg_.load_pcd_en) {
         string pcd_path = cfg_.pcd_name;
         PointCloud::Ptr pcd_map(new PointCloud);

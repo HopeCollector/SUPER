@@ -26,18 +26,24 @@ using namespace rog_map;
 using namespace super_utils;
 
 void ProbMap::initProbMap() {
+    // 保证自己只被初始化一次
     static bool init_once{false};
     if (init_once) {
         throw std::runtime_error(" -- [ROGMap] ProbMap can only init once.");
     }
     init_once = true;
+
+    // 初始化父类
     initSlidingMap(cfg_.half_map_size_i, cfg_.resolution,
                    cfg_.map_sliding_en, cfg_.map_sliding_thresh,
                    cfg_.fix_map_origin);
+    // 初始化时间消耗记录数组
     time_consuming_.resize(7);
+    // 初始化膨胀地图
     inf_map_ = std::make_shared<InfMap>(cfg_);
 
 
+    // 如果边界提取功能开启，则初始化边界地图
     if (cfg_.frontier_extraction_en) {
         fcnt_map_ = std::make_shared<FreeCntMap>(cfg_.half_map_size_i + Vec3i::Constant(2),
                                                  cfg_.resolution,
@@ -46,6 +52,7 @@ void ProbMap::initProbMap() {
                                                  cfg_.fix_map_origin);
     }
 
+    // 如果启用ESDF功能，则初始化ESDF地图
     if (cfg_.esdf_en) {
         esdf_map_ = std::make_shared<ESDFMap>();
         esdf_map_->initESDFMap(cfg_.half_map_size_i,
@@ -59,16 +66,19 @@ void ProbMap::initProbMap() {
     }
 
 
+    // 把配置参数单位从 [m] 转换为栅格数量
     posToGlobalIndex(cfg_.visualization_range, sc_.visualization_range_i);
     posToGlobalIndex(cfg_.virtual_ceil_height, sc_.virtual_ceil_height_id_g);
     posToGlobalIndex(cfg_.virtual_ground_height, sc_.virtual_ground_height_id_g);
 
+    // 重新计算地面高度和天花板高度, 高度
     cfg_.virtual_ceil_height = sc_.virtual_ceil_height_id_g * cfg_.resolution;
     cfg_.virtual_ground_height = sc_.virtual_ground_height_id_g * cfg_.resolution;
 
     cout<<"[ProbMap] virtual_ceil_height: "<<cfg_.virtual_ceil_height<<endl;
     cout<< "[ProbMap] virtual_ground_height: "<<cfg_.virtual_ground_height<<endl;
 
+    // 如果地图滑动功能开启，则设置初始滑动地图位置
     if (!cfg_.map_sliding_en) {
         std::cout << YELLOW << " -- [ProbMap] Map sliding disabled, set origin to [" << cfg_.fix_map_origin.transpose()
             << "] -- " << RESET << std::endl;
@@ -76,16 +86,19 @@ void ProbMap::initProbMap() {
     }
 
 
+    // 计算地图体积(总栅格数量)
     int map_size = sc_.map_size_i.prod();
 
-
+    // 根据栅格数量申请内存
     occupancy_buffer_.resize(map_size, 0);
     raycast_data_.raycaster.setResolution(cfg_.resolution);
     raycast_data_.operation_cnt.resize(map_size, 0);
     raycast_data_.hit_cnt.resize(map_size, 0);
 
+    // 重置局部地图
     resetLocalMap();
 
+    // 打印地图信息
     std::cout << GREEN << " -- [ProbMap] Init successfully -- ." << RESET << std::endl;
     printMapInformation();
 }

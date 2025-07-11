@@ -102,6 +102,7 @@ namespace rog_map {
 
         int getLocalIndexHash(const Vec3i &id_in) const;
 
+        // 把 [m] 为单位的坐标转换为全局栅格索引
         void posToGlobalIndex(const Vec3f &pos, Vec3i &id) const;
 
         void posToGlobalIndex(const double &pos, int &id) const;

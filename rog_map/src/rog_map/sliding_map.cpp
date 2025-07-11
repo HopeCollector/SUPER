@@ -40,6 +40,7 @@ SlidingMap::SlidingMap(const Vec3i &half_map_size_i, const double &resolution, c
 void
 SlidingMap::initSlidingMap(const rog_map::Vec3i &half_map_size_i, const double &resolution, const bool &map_sliding_en,
                            const double &sliding_thresh, const rog_map::Vec3f &fix_map_origin) {
+    // 防止多次初始化
     if (had_been_initialized) {
         throw std::runtime_error(" -- [SlidingMap]: init can only be called once!");
     }
@@ -180,6 +181,7 @@ void SlidingMap::posToGlobalIndex(const Vec3f &pos, Vec3i &id) const {
     id = (sc_.resolution_inv * pos + pos.cwiseSign() * 0.5).cast<int>();
 #endif
 
+// 在 rog_map/CMakeLists.txt#L21 定义了 ORIGIN_AT_CORNER
 #ifdef ORIGIN_AT_CORNER
     id = (pos.array() * sc_.resolution_inv).floor().cast<int>();
 #endif

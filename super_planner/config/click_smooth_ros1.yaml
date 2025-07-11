@@ -116,6 +116,7 @@ rog_map:
   unk_inflation_step: 1
   map_size: [ 50,50,6 ]
   # If the map rolling is disable, the map origin [m] should be set.
+  # 用来设置机器人在地图中的初始位置
   fix_map_origin: [ 0,0,1.5 ]
   frontier_extraction_en: false
 
