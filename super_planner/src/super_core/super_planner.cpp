@@ -35,13 +35,18 @@ namespace super_planner {
              const rog_map::ROGMapROS::Ptr &map_ptr
             ) : cfg_(Config(cfg_path)), ros_ptr_(ros_ptr), map_ptr_(map_ptr) {
 
+        // 配置可视化选项
         ros_ptr_->setResolution(cfg_.resolution);
         ros_ptr_->setVisualizationEn(cfg_.visualization_en);
+        // 初始化轨迹优化模块
         exp_traj_opt_ = std::make_shared<traj_opt::ExpTrajOpt>(cfg_.exp_traj_cfg, ros_ptr_);
         back_traj_opt_ = std::make_shared<traj_opt::BackupTrajOpt>(cfg_.back_traj_cfg, ros_ptr_);
         yaw_traj_opt_ = std::make_shared<traj_opt::YawTrajOpt>(cfg_.yaw_dot_max);
+        // 获取地图配置
         const auto &rog_map_cfg = map_ptr_->getMapConfig();
+        // 初始化A*搜索模块
         astar_ptr_ = std::make_shared<path_search::Astar>(cfg_path, ros_ptr_, map_ptr_);
+        // 初始化凸分解模块
         cg_ptr_ = std::make_shared<CorridorGenerator>(ros_ptr_, map_ptr_, cfg_.corridor_bound_dis,
                                                       cfg_.corridor_line_max_length,
                                                       cfg_.resolution, rog_map_cfg.virtual_ground_height,
@@ -49,18 +54,24 @@ namespace super_planner {
                                                       cfg_.robot_r,
                                                       cfg_.obs_skip_num,
                                                       cfg_.iris_iter_num);
+        // 配置凸分解用到的种子线段在其附近多大范围内不能有障碍
         cg_ptr_->SetLineNeighborList(cfg_.seed_line_neighbour);
 
 
+        // 初始化记录时间消耗的向量
         time_consuming_.resize(8);
 
+        // 初始化机器人状态为未知
         robot_state_.rcv = false;
+        // 初始规划器开始时刻为当前时刻
         planner_process_start_WT_ = ros_ptr_->getSimTime();
+        // 初始化基于 FOV 的安全走廊生成模块
         fov_checker_ = std::make_shared<FOVChecker>(FOVType::OMNI,
                                                     -1.0,
                                                     -35.0,
                                                     35.0);
 
+        // 设置平移量, 将查找某个点的邻居时令查找范围覆盖半径为 robot_r 的一个范围
         const int neighbor_step = floor(cfg_.robot_r / cfg_.resolution);
         astar_ptr_->setFineInfNeighbors(neighbor_step);
     }
