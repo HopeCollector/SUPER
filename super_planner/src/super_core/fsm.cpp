@@ -60,24 +60,32 @@ namespace fsm {
             return;
         }
 
+        // 在目标位置附近重新选一个空闲点作为目标点
         planner_ptr_->getMap()->getNearestInfCellNot(GridType::OCCUPIED, gi_.goal_p, gi_.goal_p, 3.0);
 
         TimeConsuming replan_once_time("replan_once_time", false);
 
+        // 重新规划一次
         RET_CODE ret_code = planner_ptr_->ReplanOnce(gi_.goal_p, gi_.goal_yaw, gi_.new_goal);
         if (ret_code == FAILED) {
+            // 规划失败不做任何处理
 //            cout << YELLOW << " -- [Fsm] ReplanOnce failed." << RESET << endl;
         } else { cout << GREEN << " -- [Fsm] ReplanOnce succeed." << RESET << endl; }
 
         if (ret_code == EMER) {
+            // 如果规划结果是紧急停止, 则切换状态到 EMER_STOP
             ChangeState("ReplanTimerCallback", EMER_STOP);
         } else if (ret_code == NEW_TRAJ) {
+            // 如果规划结果是新轨迹, 则切换状态到 GENERATE_TRAJ
             ChangeState("ReplanTimerCallback", GENERATE_TRAJ);
         } else if (ret_code == SUCCESS || ret_code == FINISH) {
+            // 如果规划结果是成功或完成, 设置状态 [没有新目标]
             gi_.new_goal = false;
+            // 发布 cmd 轨迹
             publishPolyTraj();
         }
 
+        // 记录模块耗时
         planner_ptr_->getModuleTimeConsuming(log_module_time);
         log_module_time[log_module_time.size() - 2] = replan_once_time.stop();
         // save on log
