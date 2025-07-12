@@ -95,13 +95,16 @@ namespace fsm {
         planner_ptr_->getRobotState(robot_state_);
 
 
+        // 每秒检测一次状态, 打印相关信息
         if (cur_t - last_print_t > 1.0) {
             last_print_t = cur_t;
+            // 压根没接收到里程计信息 || 里程计信息还没更新, 直接返回
             if ((!robot_state_.rcv || (ros_ptr_->getSimTime() - robot_state_.rcv_time) > 0.1)) {
                 cout << YELLOW << " -- [Fsm] No odom." << RESET << endl;
                 return;
             }
             if (!started_) {
+                // 没目标打印相关警告
                 cout << YELLOW << " -- [Fsm] Wait for goal." << RESET << endl;
             }
             cout << std::fixed << std::setprecision(3);
@@ -117,43 +120,59 @@ namespace fsm {
                 if ((!robot_state_.rcv || (ros_ptr_->getSimTime() - robot_state_.rcv_time) > 0.1)) {
                     cout << YELLOW << " -- [Fsm] No odom." << RESET << endl;
                 }
+                // 如果有目标, 则 INIT -> WAIT_GOAL
                 ChangeState("MainFsmCallback", WAIT_GOAL);
                 break;
             }
             case WAIT_GOAL: {
                 if (!gi_.new_goal) {
+                    // 没有新目标直接返回
                     return;
                 } else {
+                    // 如果等到了目标, 则 WAIT_GOAL -> GENERATE_TRAJ
                     ChangeState("MainFsmCallback", GENERATE_TRAJ);
                 }
+                // 不论如何, 删掉上一次的路径
                 resetVisualizedPath();
                 break;
             }
             case GENERATE_TRAJ: {
                 if (closeToGoal(0.1)) {
+                    // 如果距离目标点小于 0.1m, 则 GENERATE_TRAJ -> WAIT_GOAL
                     ChangeState("MainFsmCallback", WAIT_GOAL);
+                    // 设置状态为没有新目标
                     gi_.new_goal = false;
+                    // 设置状态为已经完成规划
                     finish_plan = true;
                     return;
                 }
+                // 如果距离目标点大于 0.1m, 则规划一条到目标的轨迹
                 int retcode = planner_ptr_->PlanFromRest(gi_.goal_p, gi_.goal_yaw, gi_.new_goal);
                 if (!planner_ptr_->goalValid()) {
+                    // 如果目标是非法的, 则 GENERATE_TRAJ -> WAIT_GOAL
                     cout << YELLOW << " -- [Fsm] Goal is invalid, skip this goal." << RESET << endl;
                     ChangeState("MainFsmCallback", WAIT_GOAL);
                     return;
                 }
                 if (retcode == SUCCESS || retcode == FINISH) {
+                    // 如果规划成功, 则 GENERATE_TRAJ -> FOLLOW_TRAJ
+                    // 同时设置状态 [没有新目标] [在剩余的规划中] [未完成规划]
                     gi_.new_goal = false;
                     plan_from_rest_ = true;
                     finish_plan = false;
                     if (retcode == FINISH) {
+                        // FIXME: PlanFromRest 不会返回 FINISH, 这个判断没用
+                        // 如果规划完成, 则设置状态 [已经完成规划]
                         finish_plan = true;
                     }
 
+                    // 发布轨迹
                     publishPolyTraj();
 
+                    // 切换状态到 FOLLOW_TRAJ
                     ChangeState("MainFsmCallback", FOLLOW_TRAJ);
                 } else {
+                    // 规划失败就重试
                     cout << YELLOW << " -- [Fsm] PlanFromRest failed, try replan." << RESET << endl;
                     // ros::Duration(0.1).sleep();
                 }
@@ -161,10 +180,12 @@ namespace fsm {
                 break;
             }
             case FOLLOW_TRAJ: {
+                // 发布当前位置到路径上以供可视化
                 publishCurPoseToPath();
                 break;
             }
             case EMER_STOP: {
+                // 紧急停止状态, 切换到 WAIT_GOAL
                 ChangeState("MainFsmCallback", WAIT_GOAL);
                 break;
             }
