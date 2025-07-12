@@ -153,6 +153,7 @@ namespace fsm {
             pos_cmd.yaw = yaw;
             pos_cmd.yaw_dot = yaw_dot;
             pos_cmd.trajectory_flag = on_backup_traj ? 2 : 1;
+            // omg: omega 角速度
             Vec3f rpy, omg;
             double aT;
             geometry_utils::convertFlatOutputToAttAndOmg(pvaj.col(0), pvaj.col(1), pvaj.col(2), pvaj.col(3), yaw,
@@ -344,16 +345,20 @@ namespace fsm {
             }
 
 
+            // 定义在 mars_uav_sim/mars_quadrotor_msgs/msg/PolynomialTrajectory.msg
             quadrotor_msgs::PolynomialTrajectory heartbeat;
             getOneHeartBeatMsg(heartbeat, traj_finish_);
             getOnePositionCommand(pid_cmd_, traj_finish_);
             mpc_cmd_pub_.publish(heartbeat);
             cmd_pub.publish(pid_cmd_);
             if (traj_finish_) {
+                // 如果轨迹播放完成则根据是否到达目标点进行不同处理
                 cout << GREEN << " -- [Fsm] Traj finish." << RESET << endl;
                 if (closeToGoal(0.1)) {
+                    // 若到达目标点则等待新目标 -> WAIT_GOAL
                     ChangeState("PubCmdCallback", WAIT_GOAL);
                 } else {
+                    // 若未到达目标点则生成新轨迹 -> GENERATE_TRAJ
                     ChangeState("PubCmdCallback", GENERATE_TRAJ);
                 }
             }
