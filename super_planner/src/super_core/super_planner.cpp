@@ -80,20 +80,27 @@ namespace super_planner {
     SuperPlanner::PlanFromRest(const Vec3f &goal_p,
                                const double &goal_yaw,
                                const bool &new_goal) {
+        // 干活之前先上锁, 不能与重规划同时运行
         std::lock_guard<std::mutex> guard(replan_lock_);
+        // 清除上一次规划的结果
         latest_replan.reset();
+        // 设置目标
         latest_replan.setGoal(goal_p, goal_yaw, robot_state_);
         if (robot_state_.rcv == false) {
+            // 如果没有有效的里程计消息, 则直接返回失败
             ros_ptr_->warn(" -- [SUPER] in [PlanFromRest]: No odom, force return.");
             latest_replan.setRetCode(SUPER_RET_CODE::SUPER_NO_ODOM);
             return FAILED;
         }
+        // 先把目标点和航向设置到全局信息中
         gi_.goal_p = goal_p;
         gi_.goal_yaw = goal_yaw;
         gi_.new_goal = new_goal;
         gi_.goal_valid = true;
-        vec_Vec3f viz_pts{goal_p, robot_state_.p};
 
+        // FIXME: vec_Vec3f viz_pts 应该放到大括号里面
+        // 画一条从当前位置指向目标位置的线, 同时记录时间消耗
+        vec_Vec3f viz_pts{goal_p, robot_state_.p};
         {
             TimeConsuming t_viz("viz goal path", false);
             ros_ptr_->vizGoalPath(viz_pts);
@@ -102,6 +109,7 @@ namespace super_planner {
 
 
         /// 1) First, shift the start_point to free space.
+        // 调整起始位置到一个附近的自由栅格上
         Vec3f local_star_pt;
         if (!map_ptr_->getNearestCellNot(GridType::OCCUPIED, robot_state_.p, local_star_pt, 3.0)) {
             ros_ptr_->error(
@@ -116,56 +124,80 @@ namespace super_planner {
         BackupTraj back_traj_info;
         last_exp_traj_info_.setEmpty();
         local_start_p_ = local_star_pt;
+        // 生成探索轨迹
         RET_CODE exp_ret_code = generateExpTraj(last_exp_traj_info_, exp_traj_info);
         //GenerateRestToRestExpTraj(local_star_pt, exp_traj_info);
         if (exp_ret_code == FAILED) {
+            // 生成失败就返回失败
             ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory failed with {}.",
                            RET_CODE_STR[exp_ret_code].c_str());
             return FAILED;
         } else {
+            // 成功的话就打印一条日志
             ros_ptr_->info(" -- [SUPER] in [PlanFromRest] GenerateExpTrajectory SUCCESS.");
         }
 
         back_traj_info.setEmpty();
+        // 生成备份轨迹
         RET_CODE back_ret_code = generateBackupTrajectory(exp_traj_info, back_traj_info);;
 
         if (back_ret_code == SUCCESS) {
+            // 备份轨迹也生成成功的话就进行如下处理
             if (cfg_.print_log) {
+                // 如果开启日志功能就打印一条日志
                 ros_ptr_->info(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory SUCCESS.");
             }
 
+            // 生成提交轨迹
             cmd_traj_info_.setTrajectory(exp_traj_info, back_traj_info);
+            // 记录最近一次生成的探索轨迹
             last_exp_traj_info_ = exp_traj_info;
+            // 由于刚生成完新的轨迹, 此时机器人处于新的探索轨迹上,
+            //  所以先把机器人状态设置为不在备份轨迹上
             robot_on_backup_traj_ = false;
+            // 设置全局信息中的新目标标志为 false
             gi_.new_goal = false;
 
             // For visualization
+            // 可视化提交轨迹
             {
                 TimeConsuming t_viz("viz goal VisualizeCommitTrajectory", false);
                 ros_ptr_->vizCommittedTraj(cmd_traj_info_.posTraj(), cmd_traj_info_.getBackupTrajStartTT());
                 time_consuming_[VISUALIZATION] += t_viz.stop();
+                // 设置规划结果的详细信息
+                // FIXME: latest_replan.setRetCode 根可视化也没关系, 为啥不放外面?
                 latest_replan.setRetCode(SUPER_RET_CODE::SUPER_SUCCESS_WITH_BACKUP);
             }
 
             return SUCCESS;
         } else if (back_ret_code == FINISH || back_ret_code == NO_NEED) {
+            // 如果备份轨迹生成结果为 FINISH 或 NO_NEED
             if (cfg_.print_log) {
+                // 打印一条日志
                 ros_ptr_->info(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory Finish or NO_NEED.");
             }
+            // 设置机器人为 [不在备份轨迹上]
             robot_on_backup_traj_ = false;
+            // 提交轨迹只包含探索轨迹
             cmd_traj_info_.setTrajectory(exp_traj_info);
+            // 记录最近一次生成的探索轨迹
             last_exp_traj_info_ = exp_traj_info;
+            // 设置全局信息中的新目标标志为 false
             gi_.new_goal = false;
 
             // For visualization
+            // 可视化提交轨迹
+            // FIXME: TimeConsuming t_viz 为啥不跟上面一样放在大括号里面?
             TimeConsuming t_viz("viz goal VisualizeCommitTrajectory", false);
             {
                 ros_ptr_->vizCommittedTraj(cmd_traj_info_.posTraj(), -1);
                 time_consuming_[VISUALIZATION] += t_viz.stop();
             }
+            // 设置规划结果的详细信息为 SUPER_SUCCESS_NO_BACKUP
             latest_replan.setRetCode(SUPER_RET_CODE::SUPER_SUCCESS_NO_BACKUP);
             return SUCCESS;
         }
+        // 如果备份轨迹生成结果为 FAILED, 则打印日志并返回 FAILED
         ros_ptr_->warn(" -- [SUPER] in [PlanFromRest] generateBackupTrajectory return [{}], force return",
                        RET_CODE_STR[back_ret_code].c_str());
         return FAILED;
