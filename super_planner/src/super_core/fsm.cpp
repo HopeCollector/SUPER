@@ -43,6 +43,13 @@ namespace fsm {
     }
 
     void Fsm::callReplanOnce() {
+        /**
+         * 如果满足以下情况的任何一种都会直接返回
+         *   - 程序结束
+         *   - 状态不是 FALLOW_TRAJ
+         *   - 规划完成
+         *   - 刚规划完一次
+         */
         if (stop) {
             return;
         }
