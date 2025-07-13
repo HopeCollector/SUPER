@@ -208,18 +208,25 @@ namespace super_planner {
     SuperPlanner::ReplanOnce(const Vec3f &goal_p,
                              const double &goal_yaw,
                              const bool &new_goal) {
+        // 直接对全部的重规划过程进行计时
         TimeConsuming replan_total_t("ReplanOnce", false);
+        // 干活之前先上锁, 不能与规划同时运行
         std::lock_guard<std::mutex> guard(replan_lock_);
 
+        // 更新目标位置为这一次重规划的目标位置
         gi_.goal_p = goal_p;
         gi_.goal_yaw = goal_yaw;
         gi_.new_goal = new_goal;
         gi_.goal_valid = true;
+        // 清除上一次规划的结果
         latest_replan.reset();
+        // 设置最新的重规划目标
         latest_replan.setGoal(goal_p, goal_yaw, robot_state_);
 
+        // 这里根 PlanFromRest 一样
+        // FIXME: vec_Vec3f viz_pts 应该放到大括号里面
+        // 画一条从当前位置指向目标位置的线, 同时记录时间消耗
         vec_Vec3f viz_pts{goal_p, robot_state_.p};
-
         {
             TimeConsuming t_viz("tviz", false);
             ros_ptr_->vizGoalPath(viz_pts);
@@ -229,30 +236,38 @@ namespace super_planner {
 
         /// 1) Replan EXP traj
         ExpTraj exp_traj_info;
+        // 为生成探索轨迹计时
         TimeConsuming t_exp("t_exp", false);
+        // 生成探索轨迹
         RET_CODE exp_ret_code = generateExpTraj(last_exp_traj_info_, exp_traj_info);
         time_consuming_[GENERATE_EXP_TRAJ] = t_exp.stop();
 
         if (exp_ret_code == FAILED) {
+            // 如果生成探索轨迹失败, 则打印日志并返回 FAILED
             ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: GenerateExpTrajectory failed, force return");
             return FAILED;
         } else if (exp_ret_code == NEW_TRAJ) {
+            // 如果生成探索轨迹结果为 NEW_TRAJ, 则打印日志并返回 NEW_TRAJ
             if (cfg_.print_log) {
                 ros_ptr_->info(" -- [SUPER] in [ReplanOnce]: Last epx traj end, switch to new traj.");
             }
             return NEW_TRAJ;
         } else if (exp_ret_code == EMER) {
+            // 如果生成探索轨迹结果为 EMER, 则打印日志并返回 EMER
             ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: Replan failed, switch to emer.");
             return EMER;
         } else if (exp_ret_code == SUCCESS) {
+            // 如果生成探索轨迹结果为 SUCCESS, 则打印日志
             if (cfg_.print_log) {
                 ros_ptr_->info(" -- [SUPER] in [ReplanOnce]: Replan a new exp traj success.");
             }
         } else if (exp_ret_code == NO_NEED) {
+            // 如果生成探索轨迹结果为 NO_NEED, 则打印日志并返回 NO_NEED
             if (cfg_.print_log)
                 ros_ptr_->info(" -- [SUPER] in [ReplanOnce]: No need to replan a new exp traj, use last one.");
         }
 
+        // 可视化探索轨迹中的朝向部分
         {
             TimeConsuming t_viz("tviz", false);
             ros_ptr_->vizYawTraj(exp_traj_info.posTraj(), exp_traj_info.yawTraj());
@@ -263,9 +278,11 @@ namespace super_planner {
         BackupTraj back_traj_info;
         // 2）生成back轨迹
         TimeConsuming t_back("t_back", false);
+        // 生成备份轨迹
         RET_CODE back_ret_code = generateBackupTrajectory(exp_traj_info, back_traj_info);
         time_consuming_[GENERATE_BACK_TRAJ] = t_back.stop();
 
+        // 统计前端规划时间 和 后端优化时间
         {
             ft += time_consuming_[EPX_TRAJ_FRONTEND] + time_consuming_[BACK_TRAJ_FRONTEND];
             ft_cnt++;
@@ -273,18 +290,26 @@ namespace super_planner {
             bt_cnt++;
         }
 
+        // 重规划流程计时结束
         double replan_dt = replan_total_t.stop();
         if (replan_dt > cfg_.replan_forward_dt * 0.9) {
+            // 如果重规划时间超过了配置的重规划单步时间的 90%，则打印警告日志并返回 FAILED
             ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: Replan overtime, check parameters, replan dt = {}.", replan_dt);
             return FAILED;
         }
 
+        // 若果备份轨迹生成结果为 SUCCESS, 则进行如下处理
         if (back_ret_code == SUCCESS) {
+            // 生成提交轨迹
             cmd_traj_info_.setTrajectory(exp_traj_info, back_traj_info);
+            // 记录最近一次生成的探索轨迹
             last_exp_traj_info_ = exp_traj_info;
+            // 设置状态 [未在备份轨迹上]
             robot_on_backup_traj_ = false;
+            // 设置状态 [没有新目标]
             gi_.new_goal = false;
 
+            // 可视化提交轨迹
             {
                 // For visualization
                 TimeConsuming t_viz("tviz", false);
@@ -292,17 +317,21 @@ namespace super_planner {
                 time_consuming_[VISUALIZATION] += t_viz.stop();
             }
 
+            // 设置详细状态为 SUPER_SUCCESS_WITH_BACKUP
             latest_replan.setRetCode(SUPER_SUCCESS_WITH_BACKUP);
             if (cfg_.print_log)
                 ros_ptr_->info(" -- [SUPER] in [ReplanOnce]: Replan a new back traj success, all replan success.");
             return SUCCESS;
         } else if (back_ret_code == NO_NEED) {
             // 这次生成backup轨迹的点没有意义,
+            // 如果生成备份轨迹结果为 NO_NEED, 则进行如下处理
+            // 与上面一样设置状态
             robot_on_backup_traj_ = false;
             last_exp_traj_info_ = exp_traj_info;
             gi_.new_goal = false;
 
 
+            // 可视化提交轨迹中的探索轨迹, 没有备份轨迹
             {
                 TimeConsuming t_viz("tviz", false);
                 ros_ptr_->vizCommittedTraj(cmd_traj_info_.posTraj(), -1);
@@ -312,15 +341,20 @@ namespace super_planner {
 
             if (cfg_.print_log)
                 ros_ptr_->info(" -- [SUPER] in [ReplanOnce]: No need back traj success, all replan success.");
+            // 设置最新的重规划结果为 SUPER_SUCCESS_NO_BACKUP
             latest_replan.setRetCode(SUPER_SUCCESS_NO_BACKUP);
             return SUCCESS;
         } else if (back_ret_code == FINISH) {
+            // 如果备份轨迹生成结果为 FINISH, 则进行如下处理
             // Which means the exp traj is all in known free, no need for backup traj
+            // 设置提交轨迹只包含探索轨迹
             cmd_traj_info_.setTrajectory(exp_traj_info);
+            // 设置状态, 与上面相同
             last_exp_traj_info_ = exp_traj_info;
             robot_on_backup_traj_ = false;
             gi_.new_goal = false;
 
+            // 可视化提交轨迹
             {
                 TimeConsuming t_viz("tviz", false);
                 ros_ptr_->vizCommittedTraj(cmd_traj_info_.posTraj(), -1);
@@ -329,9 +363,12 @@ namespace super_planner {
 
             if (cfg_.print_log)
                 ros_ptr_->info(" -- [SUPER] in [ReplanOnce]: No need back traj success, all replan success.");
+            
+            // 设置最新的重规划结果为 SUPER_SUCCESS_NO_BACKUP
             latest_replan.setRetCode(SUPER_SUCCESS_NO_BACKUP);
             return SUCCESS;
         }
+        // 如果备份轨迹生成结果为 FAILED, 则打印日志并返回 FAILED
         ros_ptr_->warn(" -- [SUPER] in [ReplanOnce]: generateBackupTrajectory return {}, replan Failed return",
                        RET_CODE_STR[back_ret_code].c_str());
         return FAILED;
