@@ -155,6 +155,9 @@ Mat3Df Trajectory::getState(double t) const {
     return pieces[pieceIdx].getState(t);
 }
 
+// 获取指定时间戳的状态
+// t: 输入参数, 相对于轨迹的时间戳
+// out_state: 输出参数, 轨迹指定位置设备的状态[P,V,A,J]
 bool Trajectory::getState(double t, StatePVAJ& out_state) const {
     const double & dur = getTotalDuration();
     if (t < 0) {
