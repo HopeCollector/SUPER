@@ -61,6 +61,10 @@ namespace fsm {
         rog_map::RobotState robot_state_;
 
         // params
+        // started_: 用于指示 FSM 是否已经开始运行, 它会在第一次拿到目标点后被设置为 true
+        // plan_from_rest_: 在 GENERATE_TRAJ 状态下规划路线后被设置为 true, 防止重复规划
+        //                  但是第一次进入 callReplanOnce 后就会被设置为 false, 后面在进入
+        //                  callReplanOnce 就会正常重规划了
         bool started_{false}, plan_from_rest_{false};
 
         struct GoalInfo {
@@ -145,6 +149,7 @@ namespace fsm {
     protected:
         vector<LogOneReplan> replan_logs_;
         /* Callback functions */
+        // FIXME: finish_plan 命名没有后缀下划线
         bool finish_plan = false;
         double system_start_time_;
 
