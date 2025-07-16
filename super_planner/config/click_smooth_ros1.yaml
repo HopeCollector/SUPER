@@ -6,6 +6,7 @@ fsm:
   replan_rate: 15.0
   cmd_topic: "/planning/pos_cmd"
   mpc_cmd_topic: "/planning_cmd/poly_traj"
+  # 如果设置为 true, 则会启动状态机主流程定时器, 指令发布定时器, 重规划定时器
   timer_en: true
 
 super_planner:
@@ -17,6 +18,8 @@ super_planner:
   visual_process: false
   frontend_in_known_free: false
   goal_yaw_en: true
+  # 如果配置为 true，那么在目标点的速度会被设置为最大速度的一半
+  # 方向为路径的切线方向，指向目标点
   goal_vel_en: false
 
   # 凸分解用到的线段转换成包围盒时的边界扩张的距离 [m]
@@ -27,9 +30,19 @@ super_planner:
   safe_corridor_line_max_length: 5.0
   iris_iter_num: 2
   obs_skip_num: 2
+  # 处理轨迹时每个路点之间的时间间隔 [s]
+  #   轨迹本身是多项式描述的连续轨迹, 但是不论是碰撞检测还是重规划选择新的路点都是离散的
+  #   离散的依据就是这个由时间间隔确定的, 两个连续路点的选择依据就是时间相差 dt👍
   replan_forward_dt: 0.1
+  # 规划一次的最大距离 [m]，如果目标太远会被投影到一当前位置为球心，这个值为半径的球面上
+  # 参考论文P14，左侧第二段
   planning_horizon: 7.0
   sensing_horizon: -1
+  # 基于历史轨迹重规划时希望保留的路径长度(相对于重规划时飞机的实时位置计算长度)
+  # <=0: 只保存历史轨迹中第一个路点的信息, 所谓第一个点参考 replan_forward_dt 的描述内容
+  # >0: 会尝试保存所有这个距离内的路点. 当然, 算法也不会特别尊重这个距离, 根据轨迹安全与否会有不同的处理方法
+  #   1. 整条历史轨迹安全 && 没有新目标 && 这个值大于零 => 这个距离会被设置为 double-max
+  #   2. 轨迹不安全 => 算法会丢掉从末端开始所有超过距离 && 不安全 的路点
   receding_dis: 4.0
   robot_r: 0.2
   yaw_dot_max: 3.0
