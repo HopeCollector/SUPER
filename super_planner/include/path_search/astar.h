@@ -84,6 +84,7 @@ namespace path_search {
         PathSearchConfig cfg_;
         const double tie_breaker_ = 1.0 + 1e-5;
         rog_map::vec_Vec3i sorted_pts;
+        // 查找一个点附近的邻居时用到的偏移量
         rog_map::vec_Vec3i neighbor_list;
 
         vector<GridNodePtr> grid_node_buffer_;
