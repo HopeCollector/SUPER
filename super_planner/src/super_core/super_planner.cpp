@@ -455,22 +455,47 @@ namespace super_planner {
         std::fill(time_consuming_.begin(), time_consuming_.end(), 0);
     }
 
-
+    /**
+     * @brief 生成探索轨迹（Exp Traj），用于无人机路径规划的主要方法。
+     * 
+     * 该方法根据当前机器人状态、目标点、历史轨迹等信息，生成一条新的探索轨迹。
+     * 主要流程包括：
+     * 1. 检查上一代轨迹是否可用，若不可用则重新生成。
+     * 2. 对上一条轨迹进行碰撞检测，判断是否需要重新规划, 获取安全的引导轨迹.
+     * 3. 在引导轨迹基础上继续搜索, 得到完整的, 连到目标点的轨迹.
+     * 4. 生成安全飞行走廊（SFC）。
+     * 5. 对轨迹进行优化，得到最终的多项式轨迹。
+     * 6. 生成对应的yaw轨迹。
+     * 7. 计算备份轨迹的在新轨迹上的切换时间
+     * 8. 返回生成的探索轨迹信息。
+     * 
+     * @param last_exp_traj_info 上一次的探索轨迹信息
+     * @param out_exp_traj_info 输出的新探索轨迹信息
+     * @return RET_CODE 返回轨迹生成的状态码
+     */
     RET_CODE SuperPlanner::generateExpTraj(ExpTraj &last_exp_traj_info, ExpTraj &out_exp_traj_info) {
         /* 1) Log the exp traj frontend time*/
+        // 1) 记录探索轨迹前端耗时
         TimeConsuming t_exp_frontend("t_exp_frontend", false);
 
         // use hot init or not, just prepare a guide path, a guide t, init and fina state and sfc for exp traj opt
+        // 位置初末状态
         StatePVAJ pos_init_state, pos_fina_state;
+        // 安全飞行走廊 Safe Flight Corridor
         PolytopeVec sfc;
+        // 引导路径（A*搜索得到的路径）
         vec_Vec3f guide_path;
         // the guide_stamp saves a TT
+        // 时间戳，记录每个引导路径点的时间
         vector<double> guide_stamp;
+        // 末端速度
         double guide_path_end_vel{0.0};
+        // 初始化路径点数量： 规划距离 / 地图分辨率 * 1.2
         int reserve_size = cfg_.planning_horizon / cfg_.resolution * 1.2;
         guide_path.reserve(reserve_size);
         guide_stamp.reserve(reserve_size);
 
+        // 初末航向状态
         Vec4f init_yaw{robot_state_.yaw, 0, 0, 0};
         Vec4f fina_yaw{0, 0, 0, 0};
 
@@ -479,37 +504,64 @@ namespace super_planner {
         Trajectory guide_pos_traj, guide_yaw_traj, last_exp_traj;
 
         // record the wall time (WT) and the trajectory time (TT) at the start of the replan.
-        // WT: 指实际消耗时间
+        // WT: 指实际时间，从 clock() 方法读上来的
+        // 当前规划开始的实际时间
         const double replan_process_start_WT = ros_ptr_->getSimTime();
+        
+        // TT: 指相对于轨迹的时间
+        // replan_process_start_TT: 当前规划开始时的相对于轨迹的时间
+        // replan_state_TT: 将要规划的目标状态在相对轨迹的时间戳
         double replan_process_start_TT, replan_state_TT;
 
         /* 2) Check last exp traj */
+        
+        //////////////////////////////////////
+        // 1. 从上一代提交轨迹中获取无碰撞路点 //
+        //////////////////////////////////////
         if (last_exp_traj_info.empty()) {
             /* 2.1) Perform rest2rest exp traj generation */
             // just skip the first part of the guide trajectory
+            // 如果没有之前规划过的轨迹, 则以当前位置为起点开始规划
             pos_init_state.setZero();
+            // 设置为机器人当前位置
             pos_init_state.col(0) = local_start_p_;
+            // 由于轨迹不存在, 所以时间戳什么的都没有
+            // 没有规划开始时间戳
             replan_process_start_TT = -1;
+            // 也没有相对估计的规划目标的时间戳
             replan_state_TT = -1;
         } else {
-            // 借用上一代规划结果填充到 guide_path 中，减少后面规划的计算量
+            // !!!!!! 1.1 获取上一代轨迹信息
+
+            // cmd_traj_info_ 就是论文中的 commite trajectory
+            // 提交轨迹中获取的路径时探索路径与备份路径的融合
             guide_pos_traj = cmd_traj_info_.posTraj(); // last_exp_traj;
+            // yaw 轨迹也是融合
             guide_yaw_traj = cmd_traj_info_.yawTraj(); //last_exp_traj_info.exp_yaw_traj;
+            // 这个获取的时上一轮的完整的探索轨迹
             last_exp_traj = last_exp_traj_info.posTraj();
 
+            // !!!!!! 1.2 在轨迹时间坐标系下计算规划开始时刻的时间戳, 规划起点位置的时间戳
+
+            // 当前规划开始的相对于轨迹的时间 = 当前规划开始的实际时间 - 轨迹开始的实际时间
             replan_process_start_TT = replan_process_start_WT - last_exp_traj.start_WT;
+            // (轨迹时间坐标系)这一轮规划起点的时间戳 = 本轮规划开始时间 + 路点时间间隔
+            // 因为规划开始时间戳对应的当前位置必不可能被占用, 所以往前推进一个单位的时间作为规划起始点
             replan_state_TT = replan_process_start_TT + cfg_.replan_forward_dt;
-            /* 2.2) Perform collision check on last exp traj*/
+
+            // 保存无碰撞的 <时间戳,路点> 列表
             vector<TimePosPair> last_exp_traj_time_pos;
+            // 保存时间戳对应的速度
             vector<double> last_exp_traj_vel;
 
 
-            // check early exit condition
-            // 1) if the replan state is beyond the last cmd traj, return NO_NEED
+            // !!!!!! 1.3 检查规划起点的时间戳是否合法, 路径的起始位置是否离目标点近到可以不用规划
+            // 1.3.1 如果要规划的时间点超过了提交轨迹需要的总时间,则不再规划
             if (replan_state_TT >= cmd_traj_info_.getTotalDuration()) {
                 out_exp_traj_info = last_exp_traj_info;
 
                 if (robot_on_backup_traj_) {
+                    // 如果超时时飞机还处在备份轨迹上, 则返回 FAILED
                     if (cfg_.print_log)
                         ros_ptr_->warn(
                                 " -- [SUPER] Replan, emergency stop, return FAILED and wait for plan form rest.");
@@ -520,10 +572,13 @@ namespace super_planner {
                     ros_ptr_->warn(
                             " -- [generateExpTraj] replan_state_TT >= cmd_traj_info_.pos_traj.getTotalDuration(), return NONEED and wait for plan form rest.");
                 }
+                // 如果超时 && 飞机在探索轨迹上, 则返回 NO_NEED
                 return NO_NEED;
             }
 
+            // 如果上一代的探索轨迹规划出来了, 则进行更多的检查
             if (!last_exp_traj_info.empty()) {
+                // 1.3.2 如果重规划起点的时刻超过探索路径总时间, 则直接返回
                 if (replan_state_TT >= last_exp_traj.getTotalDuration()) {
                     out_exp_traj_info = last_exp_traj_info;
                     if (cfg_.print_log)
@@ -539,7 +594,7 @@ namespace super_planner {
                     }
                 }
 
-                /// 1) Check a series of early termination conditions.
+                // 1.3.3 如果探索路径终点就在目标附近, 直接退出
                 if (!gi_.new_goal && last_exp_traj_info.getSFCSize() == 1 && last_exp_traj_info.connectedToGoal()) {
                     if (cfg_.print_log) {
                         ros_ptr_->warn(
@@ -557,10 +612,12 @@ namespace super_planner {
                     }
                 }
 
+                // 1.3.4 如果规划起点的位置就在目标附近, 直接退出
                 if (!gi_.new_goal &&
                     (gi_.goal_p - last_exp_traj.getPos(replan_state_TT)).norm() < cfg_.resolution * 3) {
                     // Return if the traj close to goal
                     out_exp_traj_info = last_exp_traj_info;
+                    // 同时设置 GoalConnected 标记
                     out_exp_traj_info.setGoalConnectedFlag(true);
 
                     ros_ptr_->warn(" -- [SUPER] Replan, close to goal and return NONEED.");
@@ -574,41 +631,53 @@ namespace super_planner {
                 }
             }
             /// Ready for replan.
+            // 如果走到这里, 说明轨迹无论如何没有与目标点连接
             out_exp_traj_info.setGoalConnectedFlag(false);
+            // ****** 1.3 结束后规划相关的时间戳得到了保证, 同时上一代探索路径的起始位置也不会离目标太近
 
-            // * 2) Check if in backup trajectory. While in backup trajectory,
-            // *    the guide trajectory should be a part of cmd trajectory.
-            // TODO: Why cannot directly replan on cmd traj? 241121
+            // !!!!!! 1.4 对上一代提交轨迹做碰撞检测
 
-            // * 3) Perform collision check on the guide trajectory.
-            // TODO 0929 critical change for hot init.
+            // 以 replan_state_TT 为起点开始检测, 将所有安全的路点加入 last_exp_traj_*
+            // 开始规划的起始时刻
             double eval_t = replan_state_TT; //replan_process_start_TT;
+            // 轨迹总时间
             double guide_pos_traj_total_time = guide_pos_traj.getTotalDuration();
 
             Vec3f temp_pt, last_sample_pt;
             last_exp_traj_time_pos.clear();
+            // FIXME: 明明是在对提交轨迹做碰撞检测, 怎么能直接设置整条探索路径为安全的呢?
             last_exp_traj_info.setWholeTrajKnownFreeFlag(true);
             last_sample_pt = guide_pos_traj.getPos(eval_t);
             eval_t += cfg_.sample_traj_dt;
             // * 4) 记录replan点在evaluated_pts上的id
+            // 这个 id 看起来没什么用
             int replan_id = -1;
             for (; eval_t < guide_pos_traj_total_time; eval_t += cfg_.sample_traj_dt) {
+                // 获取当前时刻在轨迹上的位置
                 temp_pt = guide_pos_traj.getPos(eval_t);
+                // 如果与上一个点的距离过近, 则检测跳过这个点
+                // FIXME: 但这里我觉得还是有连个点位于同一个栅格内的可能, 这种地图是按照绝对距离划分的,不是相对距离
                 if ((temp_pt - last_sample_pt).norm() < cfg_.resolution * 0.8) {
                     continue;
                 }
 
+                // 检测当前点是否被占用
                 rog_map::GridType temp_grid = map_ptr_->getInfGridType(temp_pt);
 
+                // 如果栅格状态异常则直接停止检测, 同时设置整条路径不再是安全的
                 if (temp_grid == rog_map::GridType::OCCUPIED || temp_grid == rog_map::GridType::OUT_OF_MAP) {
                     last_exp_traj_info.setWholeTrajKnownFreeFlag(false);
                     break;
                 }
+
+                // FIXME: replan_id 没用, 可以拿掉
                 if (eval_t > replan_state_TT && replan_id == -1) {
                     replan_id = last_exp_traj_time_pos.size();
                 }
+                // 保存无碰撞的点位, 时间, 和速度
                 last_exp_traj_time_pos.emplace_back(eval_t, temp_pt);
                 last_exp_traj_vel.emplace_back(guide_pos_traj.getVel(eval_t).norm());
+                // 保存当前采样点
                 last_sample_pt = temp_pt;
             }
 
@@ -616,14 +685,24 @@ namespace super_planner {
             // * 6) Decide where to split the original exp trajecory and re-plan a new one with an A*,
             // *    If the whole trajectory if free,  the whole trajectory should be receding and if not, or a new goal
             // *    is given, we should only receiding a small distance and replan new trajectory ASAP
+            
+            // !!!!!! 1.5 切割轨迹, 只保留 split_dis 范围之内的
+            // 这一步完事将得到 guide_path, guide_stamp, guide_path_end_vel
+
+            // 设置保存路点相对于当前位置的最大距离 (超过距离的路点就不要了)
             double split_dis = cfg_.receding_dis;
             if (last_exp_traj_info.wholeTrajKnownFree() && !gi_.new_goal && cfg_.receding_dis > 0.0) {
+                // 当整条轨迹是安全的 并且 没有新目标 并且 配置的重规划距离>0 时
+                // 把分割距离设置为无限大 (几乎是这样)
+                // 其实就是不做分割, 直接复用整条轨迹
                 split_dis = std::numeric_limits<double>::max();
             }
 
 
             // * 7）Begin replan process, first get the replan state from the committed trajectory.
+            // 获取规划起始时刻的状态作为初始状态
             if (!guide_pos_traj.getState(replan_state_TT, pos_init_state)) {
+                // 没拿到那肯定完犊子了
                 ros_ptr_->warn(" -- [SUPER] Invalid traj or eval t");
                 return FAILED;
             }
@@ -632,32 +711,45 @@ namespace super_planner {
             guide_stamp.clear();
             guide_path.clear();
             if (split_dis <= 0 || last_exp_traj_time_pos.empty()) {
+                // 如果分割长度小于0 || 没有安全的路点
+                // 说明不需要轨迹复用, 此时只将初始状态写入引导轨迹
                 /// No need receding, just path search.
                 guide_path.push_back(pos_init_state.col(0));
                 guide_stamp.push_back(0.0);
                 last_exp_traj_time_pos.clear();
                 last_exp_traj_time_pos.emplace_back(replan_state_TT, pos_init_state.col(0));
+                // 因为指导路径只有一个起始点, 所以末端速度设置为初始状态的速度
                 guide_path_end_vel = robot_state_.v.norm();
             } else {
+                // 如果分割长度大于0 且 有安全的路点
+                // 删掉所有超过 split_dis 距离之外的路点, 同时那些被占用的且排在末端的路点也会被丢掉
+                // 不过 last_exp_traj_time_pos 保存的本来就是安全的路点, 所以这里不会有被占用的情况
+                // FIXME: 拿掉 isOccupiedInflate 的判断, 看看对性能有多大影响
                 temp_pt = last_exp_traj_time_pos.back().second;
                 // * 8) Pop all evaluated pts after the sampled point.
                 while (map_ptr_->isOccupiedInflate(temp_pt) ||
                        (temp_pt - pos_init_state.col(0)).norm() > split_dis) {
                     last_exp_traj_time_pos.pop_back();
                     last_exp_traj_vel.pop_back();
+                    // 防止 last_exp_traj_time_pos 为空导致访问越界
                     if (last_exp_traj_time_pos.empty()) {
                         ros_ptr_->warn(" -- [SUPER] WARN, all traj is collide in INF2");
                         break;
                     }
                     temp_pt = last_exp_traj_time_pos.back().second;
                 }
+
                 if (!last_exp_traj_time_pos.empty()) {
+                    // 将安全的路点加入 guid_path guid_stamp
                     for (long unsigned int i = 0; i < last_exp_traj_time_pos.size(); i++) {
                         guide_path.push_back(last_exp_traj_time_pos[i].second);
+                        // 此时的时间坐标系转换为相对于 last_exp_traj_time_pos.front() 的时间坐标系
                         guide_stamp.push_back(last_exp_traj_time_pos[i].first - last_exp_traj_time_pos.front().first);
+                        // FIXME: 为啥不放在最后, last_exp_traj_vel.back() ? 这个也不会越界
                         guide_path_end_vel = last_exp_traj_vel[i];
                     }
                 } else {
+                    // 如果路点都被删干净了, 那么 guid_* 只配置重规划的起始状态
                     guide_path.push_back(pos_init_state.col(0));
                     guide_stamp.push_back(0.0);
                     last_exp_traj_time_pos.emplace_back(replan_state_TT, pos_init_state.col(0));
@@ -669,25 +761,36 @@ namespace super_planner {
         // second, geometry part of the guide path
         ///=================The Second Part of Guide Path ================================================
 
+
+        //////////////////////////
+        // 2. 生成完整的引导路径 //
+        /////////////////////////
+        
+        // 已有的引导路径长度
         double guide_path_length = geometry_utils::computePathLength(guide_path);
+        // 剩余需要搜索路径的长度 = 最大规划长度 - 已有的引导路径长度
         double temp_horizon = cfg_.planning_horizon - guide_path_length;
 
+        // FIXME: 用不到了, 可以删掉
         vector<int> path_passed_waypoint_id;
         vec_Vec3f inside_poly_goals;
         vector<int> sfc_waypoint_ids;
 
+        // 如果引导路径为空，或者引导路径的第一个点与初始状态的距离大于1cm，则将当前位置添加到引导路径开头
         if (guide_path.empty() ||
             ((guide_path.front() - pos_init_state.col(0)).norm() > 1e-2)) {
             guide_path.insert(guide_path.begin(), pos_init_state.col(0));
             guide_stamp.insert(guide_stamp.begin(), 0.0);
         }
 
-        // if need a geometry path
+        // 当从上一代获取的指导轨迹长度不够时, 需要再搜索后面的部分, 最终连上目标点
         if (temp_horizon > cfg_.resolution * 2) {
             /// start point TT + exp_traj start_WT
 //            double path_search_start_point_WT = guide_stamp.back() + guide_pos_traj.start_WT;
             // if the goal is close to the last point of the guide path, just add the goal to the guide path
+            // !!!!!! 2.1 如果引导路径的最后一个点与目标点的距离足够近 (小于分辨率的5倍)，则将目标点添加到引导路径中
             if ((guide_path.back() - gi_.goal_p).norm() < cfg_.resolution * 5) {
+                // 时间消耗的计算假设飞机以最大速度计算
                 guide_stamp.push_back(guide_stamp.back() +
                                       (guide_path.back() - gi_.goal_p).norm() / cfg_.exp_traj_cfg.max_vel);
                 guide_path.push_back(gi_.goal_p);
@@ -695,35 +798,39 @@ namespace super_planner {
             } else {
                 vec_Vec3f new_path;
                 // project goal within the planning horizon
-//                const Vec3f dir = (gi_.goal_p - robot_state_.p).normalized();
-//                const double dis2goal = (gi_.goal_p - robot_state_.p).norm();
-//                Vec3f cadi_p = gi_.goal_p;
-//                if(dis2goal > cfg_.planning_horizon) {
-//                    double proj_l = cfg_.planning_horizon;
-//                    Vec3f cadi_p = robot_state_.p + dir * proj_l;
-//                    int max_iter = 100;
-//                    while(map_ptr_->isOccupiedInflate(cadi_p) && max_iter-- > 0) {
-//                        if(map_ptr_->getNearestInfCellNot(OCCUPIED, cadi_p, cadi_p, 1.0)) {
-//                            break;
-//                        }
-//                        proj_l -= 2.0;
-//                        if(proj_l < 1){
-//                            ros_ptr_->warn(" -- [SUPER] Project goal failed");
-//                            gi_.goal_valid = false;
-//                            return FAILED;
-//                        }
-//                        cadi_p = robot_state_.p + dir * proj_l;
-//                    }
-//                    if(max_iter <= 0) {
-//                        ros_ptr_->warn(" -- [SUPER] Project goal failed");
-//                        gi_.goal_valid = false;
-//                        return FAILED;
-//                    }
-//                }
+                // const Vec3f dir = (gi_.goal_p - robot_state_.p).normalized();
+                // const double dis2goal = (gi_.goal_p - robot_state_.p).norm();
+                // Vec3f cadi_p = gi_.goal_p;
+                // if(dis2goal > cfg_.planning_horizon) {
+                //     double proj_l = cfg_.planning_horizon;
+                //     Vec3f cadi_p = robot_state_.p + dir * proj_l;
+                //     int max_iter = 100;
+                //     while(map_ptr_->isOccupiedInflate(cadi_p) && max_iter-- > 0) {
+                //         if(map_ptr_->getNearestInfCellNot(OCCUPIED, cadi_p, cadi_p, 1.0)) {
+                //             break;
+                //         }
+                //         proj_l -= 2.0;
+                //         if(proj_l < 1){
+                //             ros_ptr_->warn(" -- [SUPER] Project goal failed");
+                //             gi_.goal_valid = false;
+                //             return FAILED;
+                //         }
+                //         cadi_p = robot_state_.p + dir * proj_l;
+                //     }
+                //     if(max_iter <= 0) {
+                //         ros_ptr_->warn(" -- [SUPER] Project goal failed");
+                //         gi_.goal_valid = false;
+                //         return FAILED;
+                //     }
+                // }
+
+                // !!!!!! 2.2 如果引导路径的结束位置距离目标点还有一段距离, 则找一条从引导路径
+                // 最后一个点到目标点的路径，限制路径长度为 temp_horizon
                 if (!PathSearch(guide_path.back(), gi_.goal_p, temp_horizon, new_path)) {
                     ros_ptr_->warn(" -- [SUPER] PathSearch for new path failed");
                     return FAILED;
                 }
+                // 即使找到路径, 但是如果新路径的长度小于2个点, 也认为路径搜索失败
                 if (new_path.size() < 2) {
                     ros_ptr_->warn(" -- [SUPER] PathSearch for new path failed");
                     return FAILED;
@@ -731,6 +838,7 @@ namespace super_planner {
 
                 // compute total dis
                 // backward compute dis for all points
+                // 计算新路径上所有路径点之间的距离, 以及总距离
                 double total_dis{0.0};
                 vector<double> dis(new_path.size());
                 Vec3f last_p = new_path.back();
@@ -742,15 +850,17 @@ namespace super_planner {
                 }
                 total_dis += (new_path.front() - guide_path.back()).norm();
                 dis[0] = total_dis;
-//                for (int i = 0; i < dis.size(); i++) {
-//                    cout << dis[i] << " ";
-//                }
-//                cout << endl;
+                //  for (int i = 0; i < dis.size(); i++) {
+                //      cout << dis[i] << " ";
+                //  }
+                //  cout << endl;
+                // !!!!!! 2.3 计算每个路径点的时间戳
                 vector<double> stamps(new_path.size(), 0);
                 vector<double> dt(new_path.size(), 0);
                 double last_stamp = 0;
                 for (int i = dis.size() - 1; i >= 0; i--) {
                     double vel;
+                    // 计算每个路径点上应该达到的速度和时间戳
                     geometry_utils::simplePMTimeAllocator(cfg_.exp_traj_cfg.max_acc, cfg_.exp_traj_cfg.max_vel,
                                                           guide_path_end_vel,
                                                           total_dis,
@@ -760,16 +870,17 @@ namespace super_planner {
                 }
                 double time_stamp = guide_stamp.back();
 
-//                for (int i = 0; i < stamps.size(); i++) {
-//                    cout << stamps[i] << " ";
-//                }
-//                cout << endl;
-//
-//                for (int i = 0; i < dt.size(); i++) {
-//                    cout << dt[i] << " ";
-//                }
-//                cout << endl;
+                //  for (int i = 0; i < stamps.size(); i++) {
+                //      cout << stamps[i] << " ";
+                //  }
+                //  cout << endl;
+                //
+                //  for (int i = 0; i < dt.size(); i++) {
+                //      cout << dt[i] << " ";
+                //  }
+                //  cout << endl;
 
+                // 更新引导路径和时间戳
                 for (long unsigned int i = 1; i < new_path.size(); i++) {
                     double t = dt[i];
                     time_stamp += t;
@@ -779,11 +890,19 @@ namespace super_planner {
             }
         }
 
+        // 如果路径最后一点的位置与目标位置在 xoy 平面上足够近 (小于两倍栅格尺寸), 则认为该路径已与目标相连
         const bool connected_goal = (guide_path.back().head(2) - gi_.goal_p.head(2)).norm() < cfg_.resolution * 2;
         out_exp_traj_info.setGoalConnectedFlag(connected_goal);
 
+        ////////////////////////
+        // 3. 计算安全飞行走廊 //
+        ////////////////////////
+
+        // 将 A* 搜索到路径转化为多个多边形，也叫安全飞行走廊
+        // sfc：Safe Flight Corridor
         sfc.clear();
         {
+            // 可视化路径
             TimeConsuming t_viz("tviz", false);
             ros_ptr_->vizFrontendPath(guide_path);
             time_consuming_[VISUALIZATION] += t_viz.stop();
@@ -796,6 +915,7 @@ namespace super_planner {
             return FAILED;
         }
         {
+            // 可视化飞行走廊
             TimeConsuming t_viz("tviz", false);
             ros_ptr_->vizExpSfc(sfc);
             time_consuming_[VISUALIZATION] += t_viz.stop();
@@ -804,16 +924,28 @@ namespace super_planner {
         time_consuming_[EPX_TRAJ_FRONTEND] = t_exp_frontend.stop();
 
 
+        ////////////////////
+        // 4. 设置最终状态 //
+        ////////////////////
+        
         pos_fina_state.setZero();
+        // 默认将最终位置为引导路径的最后一点所在的位置
         pos_fina_state.col(0) = guide_path.back();
+        // 如果配置要求到达最终位置时是有速度的 (goal_vel_en 为真)，且目标位置到当前位置的距离还够调整速度(最大规划距离的一半)
+        // 就将目标位置的速度设置为最大速度的一半
         if (cfg_.goal_vel_en && (gi_.goal_p - robot_state_.p).norm() > cfg_.planning_horizon / 2) {
             pos_fina_state.col(1) = (gi_.goal_p - robot_state_.p).normalized() * cfg_.exp_traj_cfg.max_vel / 2;
         }
+        // 如果目标位置与最终位置的距离很近 (小于两倍的地图分辨率)
+        //  就将最终位置的速度设置为0，并将最终位置设置为目标位置 (默认是设置为引导路径的最后一点, 不一样的)
         if ((pos_fina_state.col(0) - gi_.goal_p).norm() < cfg_.resolution * 2) {
             pos_fina_state.col(1).setZero();
             pos_fina_state.col(0) = gi_.goal_p;
         }
 
+        ////////////////////
+        // 5. 求解最终轨迹 //
+        ////////////////////
         // optimize and update exp traj
         bool temp_ret;
         Trajectory out_traj;
@@ -825,17 +957,24 @@ namespace super_planner {
                                            guide_stamp,
                                            sfc,
                                            out_traj);
+        
+        // 记录时间消耗
         time_consuming_[EXP_TRAJ_OPT] = t_exp_opt.stop();
         {
+            // 记录优化相关信息
             VecDf init_ts;
             vec_Vec3f init_ps;
             exp_traj_opt_->getInitValue(init_ts, init_ps);
             latest_replan.setExpCondition(init_ts, init_ps, pos_init_state, pos_fina_state, sfc);
         }
+        
+        // 如果优化直接失败则返回失败
         if (!temp_ret) {
             ros_ptr_->warn(" -- [SUPER] OptimizationExpTrajInPolytopes for new path failed");
             return FAILED;
         }
+
+        // 如果规划时间超过了预计的规划时间, 也算失败
         double replan_total_t = (ros_ptr_->getSimTime() - replan_process_start_WT);
         if (replan_total_t > cfg_.replan_forward_dt) {
             ros_ptr_->warn(" -- [SUPER] Replan over time({})!!!! Return FAILED", replan_total_t);
@@ -843,6 +982,7 @@ namespace super_planner {
         }
 
         {
+            // 可视化规划轨迹
             TimeConsuming t_viz("tviz", false);
             ros_ptr_->vizExpTraj(out_traj);
             time_consuming_[VISUALIZATION] += t_viz.stop();
@@ -850,18 +990,31 @@ namespace super_planner {
 
         double new_traj_WT = replan_process_start_WT;
 
+        // 重新计算规划起始时刻在轨迹时间戳坐标系下的时间戳
         replan_process_start_TT = replan_process_start_WT - guide_pos_traj.start_WT;
         Trajectory temp_exp_traj;
+
+        // 尝试获取历史轨迹
         if (!last_exp_traj_info_.empty() &&
             !guide_pos_traj.getPartialTrajectoryByTime(replan_process_start_TT, replan_state_TT,
                                                        temp_exp_traj)) {
             ros_ptr_->error(" -- [SUPER] in [generateExpTraj]: getPartialTrajectoryByTime failed, force return");
             return FAILED;
         }
+
+        // 设置返回轨迹中的安全飞行走廊
         out_exp_traj_info.setSFC(sfc);
+        // 设置返回轨迹中的探索轨迹 = 上一代轨迹(从当前规划起始时刻开始) + 新规划的轨迹
         temp_exp_traj = temp_exp_traj + out_traj;
+        // 设置返回轨迹中探索轨迹的起始时间戳 = 当前规划开始的实际时间
         temp_exp_traj.start_WT = new_traj_WT; //last_exp_traj_info.replan_start_WT ;
 
+
+        ////////////////////
+        // 6. 优化朝向轨迹 //
+        ////////////////////
+
+        // 尝试获取历史轨迹中的朝向作为初始朝向
         if (!last_exp_traj_info.empty()) {
             StatePVAJ yaw_replan_state;
             if (!guide_yaw_traj.getState(replan_state_TT, yaw_replan_state)) {
@@ -872,6 +1025,8 @@ namespace super_planner {
         }
 
 
+        // 当配置要求控制最终的朝向 && 最终朝向是一个正常值 && 这条轨迹与目标位置相连
+        //  则设置最终位置的 yaw 的值
         bool free_end{true};
         if (cfg_.goal_yaw_en && !isnan(gi_.goal_yaw) && connected_goal) {
             free_end = false;
@@ -879,10 +1034,13 @@ namespace super_planner {
         }
         Trajectory new_traj, old_traj;
 
+        // 规划 yaw 的轨迹
         if (!yaw_traj_opt_->optimize(init_yaw, fina_yaw, out_traj, new_traj, 3, false, free_end)) {
             ros_ptr_->error(" -- [SUPER] in [generateExpTraj]: YawTrajOpt failed, force return");
             return FAILED;
         }
+        // 若参考了上一代轨迹, 则获取之前那一段的 yaw 轨迹,
+        //  没拿到就认为失败
         if (!last_exp_traj_info.empty()) {
             if (!guide_yaw_traj.getPartialTrajectoryByTime(replan_process_start_TT, replan_state_TT,
                                                            old_traj)) {
@@ -891,16 +1049,28 @@ namespace super_planner {
             }
         }
 
+        // 设置 yaw 的轨迹
         const auto temp_yaw_traj = old_traj + new_traj;
+
+        /////////////////////////////////////////////////
+        // 7. 计算备份轨迹切换时刻在新轨迹时间坐标系下的值 //
+        /////////////////////////////////////////////////
+
+        // 如果规划起始时刻 > 上一代轨迹的备份起始时刻, 则说明这次规划是基于备份轨迹的
+        // 重新计算备份轨迹起始时刻与结束时刻
         // check if part of the exp on last backup
         double on_backup_end_TT{-1}, on_backup_start_TT{-1};
         if (!last_exp_traj_info.empty() && replan_state_TT > cmd_traj_info_.getBackupTrajStartTT()) {
             on_backup_start_TT = cmd_traj_info_.getBackupTrajStartTT() - replan_process_start_TT;
             on_backup_end_TT = replan_state_TT - replan_process_start_TT;
         }
+
+        /////////////////////////
+        // 8. 设置输出的轨迹信息 //
+        /////////////////////////
+
         out_exp_traj_info.setTrajectory(new_traj_WT, temp_exp_traj, temp_yaw_traj, on_backup_start_TT,
                                         on_backup_end_TT);
-
         latest_replan.setExpYawTraj(temp_yaw_traj);
         latest_replan.setExpTraj(temp_exp_traj);
 
