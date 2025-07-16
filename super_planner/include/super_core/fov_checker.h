@@ -30,7 +30,9 @@ namespace super_planner {
 
     enum FOVType {
         UNDEFINED,
+        // 圆锥 cone
         CONE = 1,
+        // 全向 omnidirectional
         OMNI = 2
     };
 
