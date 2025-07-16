@@ -331,6 +331,17 @@ namespace traj_opt {
                       PolytopeVec &sfcs,
                       Trajectory &out_traj);
 
+        /**
+         * @brief 求解一个探索路径
+         * 
+         * @param headPVAJ 起始点的状态（位置、速度、加速度、加加速度）
+         * @param tailPVAJ 终点的状态（位置、速度、加速度、加加速度）
+         * @param guide_path A* 搜索出来的路径点
+         * @param guide_t A* 搜索出来的路径点对应的时间戳
+         * @param[in,out] sfcs 约束的多面体集合，输入原始集合，输出简化后的集合
+         * @param[out] out_traj 优化后的轨迹
+         * @return bool 优化是否成功
+         */
         bool optimize(const StatePVAJ &headPVAJ, const StatePVAJ &tailPVAJ,
                       const vec_E<Vec3f> &guide_path, const vector<double> &guide_t,
                       PolytopeVec &sfcs,
