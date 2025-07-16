@@ -62,6 +62,7 @@ namespace super_planner {
             return flag_empty_;
         }
 
+        // 当目标点与当前位置距离 ≤ 3*栅格尺寸 时返回 true
         bool connectedToGoal()const {
             return flag_connected_goal_;
         }
