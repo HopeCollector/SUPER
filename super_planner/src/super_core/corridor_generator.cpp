@@ -51,14 +51,15 @@ namespace super_planner {
         this->line_seed_neighbor_list = _line_seed_neighbor_list;
     }
 
-    // 在路径上搜索安全飞行走廊
-    // 输入：
-    //  - path: 路径点列表
-    //  - sfcs: 输出的安全飞行走廊列表，sfc（Safe Flight Corridor）
-    //  - shifted_start_pt: 第一个安全的起点，防止起点被障碍物占据
-    //  - cut_first_poly: 没用上
-    // 输出：
-    //  - 返回是否成功搜索到安全飞行走廊
+    /**
+     * @brief 在路径上搜索安全飞行走廊
+     * 
+     * @param path 路径点列表
+     * @param[out] sfcs 输出的安全飞行走廊列表，sfc（Safe Flight Corridor）
+     * @param[out] shifted_start_pt 第一个安全的起点，防止起点被障碍物占据
+     * @param cut_first_poly 无用参数，保留用于API稳定性
+     * @return bool 返回是否成功搜索到安全飞行走廊
+     */
     bool
     CorridorGenerator::SearchPolytopeOnPath(const vec_Vec3f &path, PolytopeVec &sfcs,
                                             Vec3f &shifted_start_pt,
