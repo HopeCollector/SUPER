@@ -545,8 +545,8 @@ namespace super_planner {
 
             // 当前规划开始的相对于轨迹的时间 = 当前规划开始的实际时间 - 轨迹开始的实际时间
             replan_process_start_TT = replan_process_start_WT - last_exp_traj.start_WT;
-            // (轨迹时间坐标系)这一轮规划起点的时间戳 = 本轮规划开始时间 + 路点时间间隔
-            // 因为规划开始时间戳对应的当前位置必不可能被占用, 所以往前推进一个单位的时间作为规划起始点
+            // (轨迹时间坐标系)这一轮规划起点的时间戳 = 本轮规划开始时间 + 预计规划耗时
+            // 因为规划开始时间戳已经是过去的了, 所以规划的起点应该向前推进一点
             replan_state_TT = replan_process_start_TT + cfg_.replan_forward_dt;
 
             // 保存无碰撞的 <时间戳,路点> 列表
@@ -974,7 +974,7 @@ namespace super_planner {
             return FAILED;
         }
 
-        // 如果规划时间超过了预计的规划时间, 也算失败
+        // 如果规划时间超过了预计的规划耗时, 也算失败
         double replan_total_t = (ros_ptr_->getSimTime() - replan_process_start_WT);
         if (replan_total_t > cfg_.replan_forward_dt) {
             ros_ptr_->warn(" -- [SUPER] Replan over time({})!!!! Return FAILED", replan_total_t);
