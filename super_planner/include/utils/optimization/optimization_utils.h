@@ -47,16 +47,21 @@ namespace optimization_utils {
                                double &f,
                                double &df);
 
-
+        // 将 tau 映射至 T
+        // tau ∈ (-inf, +inf) 映射至 T ∈ (0, +inf)
         static void forwardMapTauToT(const Eigen::VectorXd &tau,
                                      Eigen::VectorXd &T);
 
+        // 将 T 映射至 tau
+        // T ∈ (0, +inf) 映射至 tau ∈ (-inf, +inf)
         static void backwardMapTToTau(const Eigen::VectorXd &T, EIGENVEC &tau);
 
         static void propagateGradientTToTau(const Eigen::VectorXd &tau,
                                             const Eigen::VectorXd &gradT,
                                             EIGENVEC &gradTau);
-
+        
+        // 将区间 [lower_bound, upper_bound] 映射至 (-inf, +inf)
+        // inter -> inf
         static void mapIntervalToInf(const double &lower_bound,
                                      const double &upper_bound,
                                      const double &inter,

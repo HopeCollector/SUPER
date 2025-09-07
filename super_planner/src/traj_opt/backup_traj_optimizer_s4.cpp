@@ -440,20 +440,20 @@ bool BackupTrajOpt::setupProblemAndCheck() {
 }
 
 double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
-    // 1. Initialize the trajectory
-    //      the optimization varibles include time allocation [1] * pieceN + tailWaypoints [vPoly_size] * pieceN + split time [1]
+    // 待优化变量: x[[备份轨迹的耗时], [切换点位置xyz, 终点位置xyz], 切换时刻]
     Eigen::VectorXd x(opt_vars.temporalDim + opt_vars.spatialDim + 1);
     Eigen::Map<Eigen::VectorXd> tau(x.data(), opt_vars.temporalDim);
     Eigen::Map<Eigen::VectorXd> xi(x.data() + opt_vars.temporalDim, opt_vars.spatialDim);
 
-    // 2. Initialize the optimization problem
-    // 初始化均匀时间分配，均匀waypoint分配
+    // 设置 points, 默认情况下按照直线均匀分布, 从起点一条直线到终点
+    // points 在后面用于配置 xi 的初值
     Vec3f step = (opt_vars.tailPVAJ.col(0) - opt_vars.headPVAJ.col(0)) / opt_vars.piece_num;
     for (int i = 0; i < opt_vars.piece_num - 1; i++) {
         opt_vars.points.col(i) = step * (i + 1) + opt_vars.headPVAJ.col(0);
     }
     opt_vars.points.rightCols(1) = opt_vars.tailPVAJ.col(0);
 
+    // 如果给了 points 初值, 则用初值
     if(opt_vars.given_init_ts_and_ps){
         opt_vars.times = opt_vars.given_init_t_vec;
         for (int i = 0; i < opt_vars.given_init_ps.size(); i++) {
@@ -462,6 +462,8 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
         opt_vars.ts = opt_vars.given_init_ts;
     }
 
+    // 将时间映射到 tau 空间, 方便数值优化
+    // time ∈ (0, +inf) -> tau ∈ (-inf, +inf)
     if (opt_vars.uniform_time_en) {
         gcopter::backwardMapTToTau(opt_vars.total_time, tau);
     } else {
@@ -470,19 +472,24 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
 
     switch (opt_vars.pos_constraint_type) {
         case 1: {
+            // 直接将轨迹点展开成向量, 当作优化参数
             MatDf p_e = opt_vars.points;
             xi = Eigen::Map<const VecDf>(p_e.data(), p_e.size());
             break;
         }
         default: {
+            // 将轨迹点映射到多面体顶点坐标系下
             gcopter::backwardP(opt_vars.points, opt_vars.vPolytope, xi);
             break;
         }
     }
 
+    // 设置终止时刻的优化变量
     double tau_s;
     gcopter::mapIntervalToInf(opt_vars.min_ts, opt_vars.max_ts, opt_vars.ts, tau_s);
     x(x.size() - 1) = tau_s;
+
+    // 设置优化参数
     double minCostFunctional;
     lbfgs::lbfgs_parameter_t lbfgs_params;
     lbfgs_params.mem_size = 256;
@@ -502,6 +509,7 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
         opt_vars.init_ps.emplace_back(opt_vars.points.col(col));
     }
 
+    // 优化
     TimeConsuming ttt(" -- [BackupTrajOpt]", false);
     if (opt_vars.debug_en) {
         throw std::runtime_error(" -- [BackupTrajOpt] Debug mode is not supported yet.");
@@ -515,6 +523,8 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
                                     lbfgs_params);
 
     }
+
+    // 输出结果
     using namespace std;
     if (cfg_.print_optimizer_log) {
         cout << " -- [BaclOpt] Opt finish, with iter num: " << opt_vars.iter_num << "\n";
@@ -550,12 +560,15 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
     }
 
     if (ret >= 0) {
+        // 优化成功, 解析结果
+        // tau -> times
         if (opt_vars.uniform_time_en) {
             gcopter::forwardMapTauToT(tau, opt_vars.total_time);
             opt_vars.times.setConstant(opt_vars.total_time(0) / opt_vars.times.size());
         } else {
             gcopter::forwardMapTauToT(tau, opt_vars.times);
         }
+        // xi -> points
         switch (opt_vars.pos_constraint_type) {
             case 1: {
                 VecDf xi_e = xi;
@@ -568,6 +581,7 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
             }
         }
 
+        // 取回起止状态
         opt_vars.tailPVAJ.setZero();
         opt_vars.headPVAJ = opt_vars.exp_traj.getState(opt_vars.ts);
         opt_vars.tailPVAJ.col(0) = opt_vars.points.rightCols(1);
@@ -651,20 +665,32 @@ BackupTrajOpt::optimize(const Trajectory &exp_traj,
     /// Setup optimization problems
     opt_vars.default_init = true;
     opt_vars.given_init_ts_and_ps = false;
+    // 初始状态设置为切换时刻探索轨迹的状态
     opt_vars.headPVAJ = exp_traj.getState(heu_ts);
+    // 清空末端状态
     opt_vars.tailPVAJ.setZero();
+    // 没有引导轨迹
     opt_vars.guide_path.clear();
+    // 没有引导时间
     opt_vars.guide_t.clear();
+    // 设置先验探索轨迹
     opt_vars.exp_traj = exp_traj;
+    // 分段数(2)
     opt_vars.piece_num = cfg_.piece_num;
+    // 优化分配的时间范围
     opt_vars.max_ts = t_e;
     opt_vars.min_ts = t_0;
+    // 末端位置设置为先验探索轨迹的末端位置
     opt_vars.tailPVAJ.col(0) = heu_end_pt;
+    // 两端轨迹分配的时间
     opt_vars.times.resize(opt_vars.piece_num);
+    // 每段轨迹时间平分
     opt_vars.times.setConstant(heu_dur / opt_vars.piece_num);
+    // 切换时刻
     opt_vars.ts = heu_ts;
 
     if (opt_vars.uniform_time_en) {
+        // 总时长
         opt_vars.total_time(0) = heu_dur;
     }
 

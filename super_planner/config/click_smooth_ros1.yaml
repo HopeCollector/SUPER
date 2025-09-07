@@ -35,6 +35,7 @@ super_planner:
   # 规划一次的最大距离 [m]，如果目标太远会被投影到一当前位置为球心，这个值为半径的球面上
   # 参考论文P14，左侧第二段
   planning_horizon: 7.0
+  # 感知范围, 在生成备份轨迹-计算刹车距离时用到,小于零表示不考虑感知范围
   sensing_horizon: -1
   # 基于历史轨迹重规划时希望保留的路径长度(相对于重规划时飞机的实时位置计算长度)
   # <=0: 只保存历史轨迹中第一个路点的信息, 所谓第一个点参考 replan_forward_dt 的描述内容
@@ -82,8 +83,13 @@ traj_opt:
     penna_thr: 1.0e+5
 
   backup_traj:
+    # 均匀时间分配
     uniform_time_en: true
+    # 位置优化约束类型
+    # 1: 表示直接针对 xyz 进行优化
+    # 其他值表示使用凸包顶点的线性组合来表达位置, 进而进行优化
     pos_constraint_type: 1
+    # 轨迹分两段, 第一段是从当前位置到切换点(探索轨迹), 第二段是从切换点到目标点(备份轨迹)
     piece_num: 2
     energy_cost_type: 4
     block_energy_cost: true

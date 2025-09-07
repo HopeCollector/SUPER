@@ -1077,15 +1077,28 @@ namespace super_planner {
         return SUCCESS;
     }
 
+    /**
+     * @brief 生成备份轨迹
+     * @param ref_exp_traj 参考的探索轨迹
+     * @param[out] back_traj_info 备份轨迹信息
+     * @return 返回生成备份轨迹的结果代码
+     */
     RET_CODE SuperPlanner::generateBackupTrajectory(ExpTraj &ref_exp_traj, BackupTraj &back_traj_info) {
+        // 在输出里记录当前机器人位置
+        // FIXME: 这个锁最好直接内嵌在方法里, 不要显式的写在外头
         drone_state_mutex_.lock();
         back_traj_info.setRobotPos(robot_state_.p);
         drone_state_mutex_.unlock();
+
+        // 对整个流程计时
         TimeConsuming t_back_frontend("t_back_frontend", false);
+        // 获取探索轨迹的总时间
         double total_dur = ref_exp_traj.getTotalDuration();
+        // 探索轨迹时间坐标系下的规划开始时刻
         double start_t = ros_ptr_->getSimTime() - ref_exp_traj.getStartWallTime();
 
 
+        // 如果当前规划开始的时间戳超过了探索轨迹的总时间, 则直接返回
         if (start_t > total_dur - 0.01) {
             if (cfg_.print_log) {
                 ros_ptr_->info(" -- [SUPER] in [generateBackupTrajectory]: start_t > total_dur, return NO_NEED");
@@ -1093,48 +1106,81 @@ namespace super_planner {
             return NO_NEED;
         }
 
-        Vec3f temp_point;
-        double out_t;
-        bool all_traj_visible{true};
-        // 同时记录每一个点的刹车时间和刹车距离
-        vector<double> min_stop_dis;
-        vector<TimePosPair> eval_ps;
-        Vec3f temp_vel;
 
-        // 记录当前时刻到最远时刻的所有可视部分
+        // ****** 搜索探索轨迹上的安全部分(最远可视部分) ******
+        // 从 start_t 时刻开始沿着探索轨迹 ref_exp_traj 往后搜索
+        // 直到搜索到第一个碰撞点为止
+
+        // 轨迹上采样的时间戳, 用于碰撞检测
+        double out_t;
+        // out_t 时刻探索轨迹上飞机的位置
+        Vec3f temp_point;
+        // out_t 时刻探索轨迹上的飞机速度, 用于计算刹车距离
+        Vec3f temp_vel;
+        // out_t 时刻飞机从 temp_vel 速度以最大加速度刹车需要的距离
+        vector<double> min_stop_dis;
+        // <out_t, temp_point>, 除非整条轨迹无碰撞,
+        // 否则离开下面的循环后这里面保存的最后一个点就是发生碰撞的点
+        vector<TimePosPair> eval_ps;
+        // 表示轨迹安全无碰撞的标志位
+        bool all_traj_visible{true};
+
+        // 探索轨迹上规划开始时刻飞机应该在的位置
         Vec3f last_pos = ref_exp_traj.getPos(start_t);
         for (out_t = start_t; out_t < total_dur; out_t += cfg_.sample_traj_dt) {
+            // 获取探索轨迹上 out_t 时刻飞机应该在的位置
             temp_point = ref_exp_traj.getPos(out_t);
+            // 如果 last_pos 与 out_t 时刻的飞机位置距离过近, 则跳过这个点
             if ((last_pos - temp_point).norm() < cfg_.resolution * 0.8) {
                 continue;
             }
+            // 更新 last_pos
             last_pos = temp_point;
+            // 获取 out_t 时刻飞机的速度
             temp_vel = ref_exp_traj.getVel(out_t);
             // Compute initial
+            // 计算速度标量
             double v_norm = temp_vel.norm();
+            // 计算这个速度下的刹车距离(初始速度为 v, 加速度为 a, 求刹车距离)
+            // x = 0.5v * (v / a)
             min_stop_dis.push_back(v_norm * v_norm / 2.0 / cfg_.exp_traj_cfg.max_acc);
+            // 记录刹车点的时间和位置
             eval_ps.push_back(std::pair<double, Vec3f>(out_t, temp_point));
+            // 设置碰撞检测的探测范围
+            // 在[感知范围(必须大于零才算合法)]和[安全走廊线最大长度]之间取最小值
             const double min_dis =
                     cfg_.sensing_horizon > 0 ? std::min(cfg_.sensing_horizon, cfg_.safe_corridor_line_max_length)
                                              : cfg_.safe_corridor_line_max_length;
+            
+            // 从当前飞机的位置到 temp_point 方向的线段上, 检测是否有障碍物
+            // 从 p1 -> p2 的方向上检测这么远
             if (!map_ptr_->isLineFree(back_traj_info.getRobotPos(),
                                       temp_point,
                                       min_dis,
                                       cfg_.seed_line_neighbour)) {
+                // 如果有障碍物, 则认为整条轨迹不再是完全可见的
                 all_traj_visible = false;
+                // 结束搜索
                 break;
             }
         }
 
+        // ****** 额外处理整条轨迹都是<安全>的情况 ******
         if (all_traj_visible) {
             back_traj_info.setEmpty();
             {
+                // 获取总时间, 当结束时间用(轨迹时间坐标系上起点是 0 时刻)
                 double dur = ref_exp_traj.getTotalDuration();
+                // 获取探索轨迹结束时飞机的位置
                 Vec3f seed_pt = ref_exp_traj.getPos(dur);
+                // 将当前位置与飞机的结束位置连线
                 Line line{back_traj_info.getRobotPos(), seed_pt};
+                // 以 line 为种子生成安全走廊
                 Polytope temp_poly;
                 if (cg_ptr_->GeneratePolytopeFromLine(line, temp_poly)) {
+                    // 如果走廊生成成功则将其添加到返回值中
                     back_traj_info.setSFC(temp_poly);
+                    // 一些可视化操作
                     {
                         TimeConsuming t_viz("tviz", false);
                         ros_ptr_->vizBackupSfc(temp_poly);
@@ -1142,9 +1188,15 @@ namespace super_planner {
                     }
                 }
             }
+            // 无论如何都返回 Finish, 即使走廊生成失败
             return FINISH;
         }
+
+        // ****** 从这里开始, 就是处理探索轨迹有碰撞的情况了 ******
+        // 获取发生碰撞的点
         Vec3f invisible_p = eval_ps.back().second;
+        // 在轨迹上往回找, 找到第一个不在碰撞点附近(机器人半径)的点
+        // 记下其在轨迹上的时间戳 out_t
         while (out_t > start_t) {
             out_t -= cfg_.sample_traj_dt;
             Vec3f out_p = ref_exp_traj.getPos(out_t);
@@ -1153,6 +1205,7 @@ namespace super_planner {
             }
         }
 
+        // 防止 out_t 比 start_t 还小
         double seed_point_t = std::max(start_t, out_t);
 
         // TODO check this logic, comment on Dec. 13
@@ -1165,10 +1218,18 @@ namespace super_planner {
         // return NO_NEED;
         // }
 
-
+        // 获取 seed_point_t 时刻探索轨迹上的位置
         Vec3f seed_point = ref_exp_traj.getPos(seed_point_t);
 
+        // 选择一个安全的起点
+        // 如果 shifted_sfc_start_pt_ 合法就用它, 否则就用机器人当前位置
+        // 因为 shifted_sfc_start_pt_ 是在生成探索轨迹时计算的, 而当前方法又是紧跟着
+        // 生成探索轨迹的方法调用的, 所以它应该是比较新的
+        // FIXME: 这玩意时效性保证不了吧? 为啥不重新搜索一个起点?
         Vec3f shifted_robot_p = shifted_sfc_start_pt_.norm()> 999?robot_state_.p:shifted_sfc_start_pt_;
+        
+        // 在安全起点附近搜索一个新的安全起点
+        // 防止当前安全起点处于占用状态, 在它附近再搜索一个安全的点
         if (!map_ptr_->getNearestCellNot(GridType::OCCUPIED, shifted_robot_p, shifted_robot_p, 3.0)) {
             ros_ptr_->error(
                     " -- [SUPER] in [PlanFromRest] Local start point is deeply occupied, which should not happened.");
@@ -1176,12 +1237,15 @@ namespace super_planner {
             return FAILED;
         }
 
+        // 设置种子线段 安全起点 -> 探索轨迹上最后一个安全点
         Line line{shifted_robot_p, seed_point};
+        // 生成安全走廊
         Polytope temp_poly;
         if (!cg_ptr_->GeneratePolytopeFromLine(line, temp_poly)) {
             ros_ptr_->warn(" -- [SUPER] GeneratePolytopeFromLine failed, force return");
             return FAILED;
         }
+        // 在安全走廊内找出其中最深的一点
         Eigen::Vector3d inner;
         Eigen::Matrix3Xd vPoly;
         if (!geometry_utils::findInterior(temp_poly.GetPlanes(), inner)) {
@@ -1190,6 +1254,7 @@ namespace super_planner {
             return FAILED;
         }
 
+        // 如果配置要求使用 FOV 切割, 则对安全走廊进行 FOV 切割
         if (cfg_.use_fov_cut) {
             if (!fov_checker_->cutPolyByFov(robot_state_.p, robot_state_.q, seed_point,
                                             temp_poly)) {
@@ -1197,7 +1262,8 @@ namespace super_planner {
                 return FAILED;
             }
         }
-        // cut by sensing horizon
+        
+        // 如果限制了传感器视野, 则用其对安全走廊进行进一步切割
         if (cfg_.sensing_horizon > 0 &&
             !fov_checker_->cutPolyBySensingHorizon(robot_state_.p, seed_point, cfg_.sensing_horizon,
                                                    temp_poly)) {
@@ -1206,8 +1272,10 @@ namespace super_planner {
             return FAILED;
         }
 
+        // 设置安全走廊
         back_traj_info.setSFC(temp_poly);
 
+        // 可视化
         {
             TimeConsuming t_viz("tviz", false);
             ros_ptr_->vizBackupSfc(temp_poly);
@@ -1216,15 +1284,25 @@ namespace super_planner {
 
 //        Vec3f out_p = temp_point;
 //        double t_R = 0.0;
+        // 安全路径第一个点的时间戳 + 采样时间
         double eval_t = eval_ps.back().first + cfg_.sample_traj_dt;
+        // 碰撞发生的位置
         last_pos = eval_ps.back().second;
+        // 当碰撞发生在安全走廊内 && 时间戳还没超过轨迹总时间时
+        // FIXME: 这个循环似乎根本进不去? eval_ps.back().second 本来是碰撞点
+        // , 它必然不会在安全走廊内
         while (temp_poly.PointIsInside(eval_ps.back().second) && eval_t < total_dur) {
+            // 获取 eval_t 时刻探索轨迹上的位置
             Vec3f cur_pos = ref_exp_traj.getPos(eval_t);
 
+            // 如果与上一个点距离过近则跳过
             if ((cur_pos - last_pos).norm() < cfg_.resolution * 0.8) {
                 eval_t += cfg_.sample_traj_dt;
                 continue;
             }
+
+            // 获取速度, 计算刹车距离, 记录结果
+            // BUG: 这里应该用 eval_t, 不然在这搜索个锤子?
             temp_vel = ref_exp_traj.getVel(out_t);
             double v_norm = temp_vel.norm();
             min_stop_dis.push_back(v_norm * v_norm / 2.0 / cfg_.exp_traj_cfg.max_acc);
@@ -1232,27 +1310,42 @@ namespace super_planner {
             last_pos = cur_pos;
             eval_t += cfg_.sample_traj_dt;
         }
+        // 删掉最后发生的碰撞的点
         eval_ps.pop_back();
+        // 获取最后一个安全点的时间戳和位置
+        // 注意: 这些东西都是探索轨迹上的
         seed_point = eval_ps.back().second;
         seed_point_t = eval_ps.back().first;
 
         //        bool use_new{true};
         //        if (use_new) {
+        // 探索轨迹时间坐标系: 当前时间
         double t0 = ros_ptr_->getSimTime() -
                     ref_exp_traj.getStartWallTime() + 0.01;
+        // 探索轨迹时间坐标系: 安全轨迹结束时间
         double te = seed_point_t;
         //            cout << "t0: " << t0 << endl;
         //            cout << "te: " << te << endl;
         //            cout << "exp_traj_dur: " << ref_exp_traj.optimized_exp_traj.getTotalDuration() << endl;
+        // 结束时刻的速度(标量)
         double vel_e_n = ref_exp_traj.getVel(te).norm();
+        // 切换至备份轨迹时刻的初值
+        // 使用 max 即意味着让飞机尽可能晚的切换到备份轨迹上
         double heu_ts = std::max((t0 + te) / 2, te - vel_e_n / cfg_.back_traj_cfg.max_acc);
+        // 在备份轨迹上的时间
         double heu_dur = te - heu_ts;
+        // 切换点
         Vec3f heu_p = seed_point;
+        // 结束前端路径搜索的计时
         time_consuming_[BACK_TRAJ_FRONTEND] = t_back_frontend.stop();
+        // 开始优化备份轨迹的计时
         TimeConsuming t_back_opt("t_back_opt", false);
+        // 切换点的时间戳(优化后的输出)
         double opt_ts = heu_ts;
+        // 优化后的备份轨迹
         Trajectory temp_pos_traj;
         auto sfc0 = back_traj_info.getSFC();
+        // 第一遍优化, 使用启发式的切换点和切换时间
         bool temp_ret = back_traj_opt_->optimize(ref_exp_traj.posTraj(),
                                                  t0,
                                                  te,
@@ -1262,13 +1355,24 @@ namespace super_planner {
                                                  back_traj_info.getSFC(),
                                                  temp_pos_traj,
                                                  opt_ts);
+        // 后端优化计时结束
+        // FIXED: 下面还有第二遍优化呢, 怎么就计时结束了?
+        // 因为下面的优化没用
         time_consuming_[BACK_TRAJ_OPT] = t_back_opt.stop();
 
+        // 这里头单独再跑一遍优化, 用上次优化的结果作为初值
+        // FIXME: 可是为什么呢? 优化的结果也没用上?
         {
+            // 优化后的切换时间
             double init_ts;
+            // 优化后的两段轨迹的时间分配
+            // 第一段是当前位置到切换点, 在探索轨迹上
+            // 第二段是切换点到备份轨迹终点, 在备份轨迹上
             VecDf init_times;
+            // 优化后的停止位置 ???
             vec_Vec3f init_ps;
             back_traj_opt_->getInitValue(init_ts, init_times, init_ps);
+            // 记录备份轨迹优化结果的相关状态
             latest_replan.setBackupCondition(init_ts, init_times, init_ps,
                                              t0, te,
                                              back_traj_info.getSFC());
@@ -1288,10 +1392,12 @@ namespace super_planner {
         }
 
         if (!temp_ret) {
+            // 优化失败返回 OPT_FAILED
             ros_ptr_->warn(" -- [SUPER] OptimizationBakTrajInPolytopes failed, force return");
             back_traj_info.setEmpty();
             return OPT_FAILED;
         } else {
+            // 优化朝向轨迹
             Vec4f yaw_init_vec = ref_exp_traj.getYawState(opt_ts).row(0);
             Vec4f yaw_goal{0, 0, 0, 0};
             bool free_end{true};
@@ -1309,24 +1415,29 @@ namespace super_planner {
             }
 
 
+            // 检查优化结果是否合法
+            // 1) 切换时间必须 >= 规划开始时间
             if (opt_ts < t0) {
                 ros_ptr_->error(" -- [SUPER] opt_ts {} < t0 {}", opt_ts, t0);
                 return OPT_FAILED;
             }
             double new_ts_WT = ref_exp_traj.getStartWallTime() + opt_ts;
             const auto &committed_ts_WT = cmd_traj_info_.getBackupTrajStartTT();
+            // 2) 提交轨迹的切换时间合法 && 切换时间必须 >= 上一代轨迹的切换时间
             if (committed_ts_WT < cmd_traj_info_.getTotalDuration() && new_ts_WT < committed_ts_WT) {
                 ros_ptr_->error(" -- [SUPER] new_ts_WT {} < committed_ts_WT {}", new_ts_WT, committed_ts_WT);
                 return OPT_FAILED;
             }
 
 
+            // 可视化
             {
                 TimeConsuming t_viz("tviz", false);
                 ros_ptr_->vizBackupTraj(temp_pos_traj);
                 time_consuming_[VISUALIZATION] += t_viz.stop();
             }
 
+            // 设置输出
             back_traj_info.setTrajectory(new_ts_WT, opt_ts, temp_pos_traj, temp_yaw_traj);
             latest_replan.setBackupTraj(temp_pos_traj);
             latest_replan.setBackupYawTraj(temp_yaw_traj);

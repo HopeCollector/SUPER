@@ -63,6 +63,8 @@ namespace super_planner {
         CorridorGenerator::Ptr cg_ptr_;
         path_search::Astar::Ptr astar_ptr_;
         ros_interface::RosInterface::Ptr ros_ptr_;
+        // 第一个安全的起点，防止起点被障碍物占据
+        // 在 SuperPlanner::generateExpTraj 中由 CorridorGenerator::SearchPolytopeOnPath 设置
         Vec3f shifted_sfc_start_pt_;
 
         traj_opt::ExpTrajOpt::Ptr exp_traj_opt_;

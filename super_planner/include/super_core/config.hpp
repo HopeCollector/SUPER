@@ -52,6 +52,7 @@ namespace super_planner {
         bool visual_process;
         bool frontend_in_known_free;
 
+        // 栅格地图中的栅格尺寸
         double resolution;
         double planning_horizon;
         double receding_dis;
@@ -63,6 +64,9 @@ namespace super_planner {
         int obs_skip_num;
         double corridor_bound_dis, corridor_line_max_length;
         double replan_forward_dt;
+        // 飞机以最高速度通过一个栅格的耗时
+        // 按照整个时间步长计算的话, 即使飞机在最高速度下飞行
+        // 也可以保证每个经过栅格都能被访问到
         double sample_traj_dt;
         double robot_r;
         int iris_iter_num;
@@ -73,6 +77,7 @@ namespace super_planner {
         // Yaw mode: 1 heading to velocity, 2 heading to goal
         int yaw_mode = YAW_TO_VEL;
 
+        // 里面存的都是格子坐标的偏移量
         // 凸分解用到的种子线段在其附近多大范围内不能有障碍
         // 单位是格子数, 需要在线段每一点上向外扩张出半径为 robot_r 的范围
         rog_map::vec_E<rog_map::Vec3i> seed_line_neighbour;

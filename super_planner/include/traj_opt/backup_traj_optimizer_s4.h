@@ -74,6 +74,8 @@ namespace traj_opt {
             Eigen::VectorXd partialGradByTimes;
             bool default_init{true};
             bool given_init_ts_and_ps{false};
+            // 轨迹数量(2, 写死的)
+            // 轨迹分两段, 第一段是从当前位置到切换点(探索轨迹), 第二段是从切换点到目标点(备份轨迹)
             int piece_num;
             Eigen::Matrix3Xd points;
             Eigen::VectorXd times;
@@ -93,6 +95,8 @@ namespace traj_opt {
             vec_E<Vec3f> guide_path;
             vector<double> guide_t;
 
+            // 要优化的时间变量维度(1, 因为备份轨迹只有一段)
+            // 空间维度(6 = 3 * piece_num)
             int temporalDim, spatialDim;
 
             VecDf penalty_log;

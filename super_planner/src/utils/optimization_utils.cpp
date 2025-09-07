@@ -185,6 +185,8 @@ void Gcopter<EIGENVEC>::backwardGradP(const Eigen::VectorXd &xi,
 
 }
 
+// 为输入的 points 找出使用 vPoly 中的顶点作为分量表达的 xi
+// p ≈ v1 * xi1 + v2 * xi2 + ... + vn * xin
 template<typename EIGENVEC>
 void Gcopter<EIGENVEC>::backwardP(const Eigen::Matrix3Xd &points, const PolyhedronV &vPoly, EIGENVEC &xi) {
     // 所有需要优化的点大小
