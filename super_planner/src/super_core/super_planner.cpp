@@ -890,7 +890,7 @@ namespace super_planner {
             }
         }
 
-        // 如果路径最后一点的位置与目标位置在 xoy 平面上足够近 (小于两倍栅格尺寸), 则认为该路径已与目标相连
+        // FIXME: 如果路径最后一点的位置与目标位置在 xoy 平面上足够近 (小于两倍栅格尺寸), 则认为该路径已与目标相连
         const bool connected_goal = (guide_path.back().head(2) - gi_.goal_p.head(2)).norm() < cfg_.resolution * 2;
         out_exp_traj_info.setGoalConnectedFlag(connected_goal);
 
@@ -932,7 +932,7 @@ namespace super_planner {
         // 默认将最终位置为引导路径的最后一点所在的位置
         pos_fina_state.col(0) = guide_path.back();
         // 如果配置要求到达最终位置时是有速度的 (goal_vel_en 为真)，且目标位置到当前位置的距离还够调整速度(最大规划距离的一半)
-        // 就将目标位置的速度设置为最大速度的一半
+        // FIXME: 就将目标位置的速度设置为最大速度的一半
         if (cfg_.goal_vel_en && (gi_.goal_p - robot_state_.p).norm() > cfg_.planning_horizon / 2) {
             pos_fina_state.col(1) = (gi_.goal_p - robot_state_.p).normalized() * cfg_.exp_traj_cfg.max_vel / 2;
         }
