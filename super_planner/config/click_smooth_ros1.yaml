@@ -1,6 +1,9 @@
 fsm:
   click_goal_en: true
   click_goal_topic: "/goal"
+  # 选中的所有点目标都会被设置到这个高度
+  # 如果 < -5., 则表示使用点目标本身的高度
+  # 注意: 这个高度是相对于世界坐标系的, 不是相对于机器人当前的高度
   click_height: 1.5
   click_yaw_en: true
   replan_rate: 15.0
