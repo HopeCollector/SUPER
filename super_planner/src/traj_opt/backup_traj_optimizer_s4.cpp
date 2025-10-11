@@ -546,6 +546,8 @@ double BackupTrajOpt::optimize(Trajectory &traj, const double &relCostTol) {
         ret = -1;
         if (cfg_.print_optimizer_log) {
             cout << " -- [BaclOpt] Opt finish, with iter num: " << opt_vars.iter_num << "\n";
+            // penalty_log 参见 constraintsFunctional 函数 L246
+            // 表示各项违反约束的程度
             cout << "\tEnergy: " << opt_vars.penalty_log(0) << endl;
             cout << "\tPos: " << opt_vars.penalty_log(1) << endl;
             cout << "\tVel: " << opt_vars.penalty_log(2) << endl;

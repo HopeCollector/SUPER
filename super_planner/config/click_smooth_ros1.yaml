@@ -65,6 +65,7 @@ traj_opt:
     max_omg: 2.5
     max_acc_thr: 20.0
     min_acc_thr: 6.0
+    # 可违反上述约束的最大值
     penna_margin: 0.05
 
   exp_traj:
